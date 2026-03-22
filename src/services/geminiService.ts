@@ -1500,6 +1500,9 @@ MINIMUM 10 annotations. ALL must use lens "ppa". Include price levels in every l
           await new Promise(resolve => setTimeout(resolve, decision.delayBeforeNextCallMs));
         }
 
+        // Wrap entire lens pipeline in try/catch so one lens failure doesn't crash the whole analysis
+        try {
+
         // ===== STAGE 1: Primary Analysis AI =====
         const messages: GroqMessage[] = [
           {
@@ -1681,6 +1684,21 @@ IMPORTANT:
 
         allAnnotations.push(...finalAnnotations);
         allAnalysisParts.push(cleanAnalysis);
+
+        } catch (lensError) {
+          // Individual lens failed — generate fallback analysis instead of crashing the whole pipeline
+          console.error(`[Orchestrator] Lens "${lens}" pipeline FAILED. Generating fallback:`, lensError);
+          const fallbackAnnotations = generateDefaultAnnotations([lens]);
+          allAnnotations.push(...fallbackAnnotations);
+          const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
+          const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
+          allAnalysisParts.push(
+            `**${lens.toUpperCase()} Analysis — Temporary Failure**\n\n` +
+            (isRateLimit
+              ? `The AI analysis engine is currently rate-limited. The Groq API free tier allows 30 requests per minute. Please wait 30-60 seconds and try again.\n\nDefault annotations have been placed as placeholders.`
+              : `The AI analysis engine encountered an error: ${errorMsg}\n\nDefault annotations have been placed as placeholders. Please retry the analysis.`)
+          );
+        }
       }
 
       // ===== ORCHESTRATOR: Post-pipeline health summary =====
