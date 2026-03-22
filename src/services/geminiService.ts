@@ -379,8 +379,8 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     shouldRunValidator: true,
     shouldRunKnowledgeSearch: true,
     shouldFetchMarketData: true,
-    delayBeforeNextCallMs: Math.min(optimalDelay, 2500),
-    reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${optimalDelay}ms.`
+    delayBeforeNextCallMs: Math.max(2000, Math.min(optimalDelay, 3500)),
+    reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${Math.max(2000, Math.min(optimalDelay, 3500))}ms.`
   };
 }
 
@@ -479,6 +479,9 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
+      // Add 90-second timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
         headers: {
@@ -491,7 +494,9 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
           temperature: 0.7,
           max_tokens: 8192,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       // Extract rate limit headers for orchestrator
       const rateLimitHeaders = {
@@ -525,9 +530,10 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
     } catch (err) {
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
-      // Network error — wait and retry
-      const backoff = Math.min(2000 * Math.pow(2, attempt), 15000);
-      console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}). Retrying in ${backoff}ms...`, err);
+      // Network error — wait and retry with longer backoff
+      const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}. Retrying in ${backoff}ms...`);
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
   }
@@ -1692,10 +1698,13 @@ IMPORTANT:
           allAnnotations.push(...fallbackAnnotations);
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
           const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
+          const isNetworkError = errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('abort') || errorMsg.includes('timeout');
           allAnalysisParts.push(
             `**${lens.toUpperCase()} Analysis — Temporary Failure**\n\n` +
             (isRateLimit
               ? `The AI analysis engine is currently rate-limited. The Groq API free tier allows 30 requests per minute. Please wait 30-60 seconds and try again.\n\nDefault annotations have been placed as placeholders.`
+              : isNetworkError
+              ? `The AI analysis engine experienced a network timeout. This is usually temporary — the API may be under heavy load. Please wait a moment and retry.\n\nDefault annotations have been placed as placeholders.`
               : `The AI analysis engine encountered an error: ${errorMsg}\n\nDefault annotations have been placed as placeholders. Please retry the analysis.`)
           );
         }
