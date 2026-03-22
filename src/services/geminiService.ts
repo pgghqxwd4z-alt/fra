@@ -1692,12 +1692,87 @@ IMPORTANT:
         allAnalysisParts.push(cleanAnalysis);
 
         } catch (lensError) {
-          // Individual lens failed — generate fallback analysis instead of crashing the whole pipeline
-          console.error(`[Orchestrator] Lens "${lens}" pipeline FAILED. Generating fallback:`, lensError);
-          const fallbackAnnotations = generateDefaultAnnotations([lens]);
-          allAnnotations.push(...fallbackAnnotations);
+          // Individual lens failed — try text-only fallback API before giving up
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
           const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
+          console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting text-only fallback API...`);
+
+          // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
+          if (!isRateLimit) {
+            try {
+              console.log(`[Orchestrator] Fallback API for "${lens}": Using text-only llama-3.3-70b-versatile...`);
+              await new Promise(resolve => setTimeout(resolve, 2000)); // Brief cooldown before fallback
+
+              const fallbackMessages: GroqMessage[] = [
+                {
+                  role: 'system',
+                  content: lensConfig.system
+                },
+                {
+                  role: 'user',
+                  content: `The vision model could not process the chart image. Based on your deep expertise in ${
+                    lens === 'smc' ? 'Smart Money Concepts (Order Blocks, FVGs, institutional zones)'
+                    : lens === 'gs' ? 'Goldman Sachs institutional flow analysis (liquidity voids, dark pools, institutional positioning)'
+                    : lens === 'psych' ? 'trading psychology (fear zones, retail liquidation triggers, stop clusters)'
+                    : 'pure price action (support/resistance, candlestick patterns, trendlines)'
+                  }, provide a GENERAL analytical framework and educational analysis that a trader would use on any chart.
+
+USER DIRECTIVE: ${prompt}
+
+Since the chart image is unavailable, provide:
+1. A comprehensive framework for how to analyze a chart using this lens
+2. Key patterns and setups to look for
+3. Common institutional footprints and what they indicate
+4. General market structure assessment methodology
+5. Risk management guidelines specific to this framework
+
+Also provide a JSON annotation block with general-purpose educational annotations:
+\`\`\`json
+[
+  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Look for Order Blocks at swing points' : lens === 'gs' ? 'Identify Institutional Flow direction' : lens === 'psych' ? 'Map Fear/Greed Zones' : 'Mark Key S/R Levels'}", "yPercent": 20, "xPercent": 15},
+  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Check FVGs for unfilled gaps' : lens === 'gs' ? 'Locate Liquidity Voids' : lens === 'psych' ? 'Identify Stop Clusters' : 'Confirm with Candlestick Patterns'}", "yPercent": 50, "xPercent": 50},
+  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Identify Inst. Buy/Sell Zones' : lens === 'gs' ? 'Map GS Buy/Sell Zones' : lens === 'psych' ? 'Spot Retail Liquidation Triggers' : 'Assess Trend Structure'}", "yPercent": 80, "xPercent": 75}
+]
+\`\`\``
+                }
+              ];
+
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.3-70b-versatile', 2, `fallback-${lens}`);
+              const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
+
+              if (fallbackAnnotations.length === 0) {
+                allAnnotations.push(...generateDefaultAnnotations([lens]));
+              } else {
+                allAnnotations.push(...fallbackAnnotations);
+              }
+
+              // Clean the fallback analysis text
+              let cleanFallback = fallbackText
+                .replace(/```json[\s\S]*?```/g, '')
+                .replace(/```[\s\S]*?```/g, '')
+                .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
+                .replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+
+              allAnalysisParts.push(
+                `**${lens.toUpperCase()} Analysis — Fallback Mode (Text-Only AI)**\n\n` +
+                `_Note: The vision model was unavailable, so this analysis is framework-based rather than chart-specific. Retry for full visual analysis._\n\n` +
+                cleanFallback
+              );
+
+              console.log(`[Orchestrator] Fallback API for "${lens}" SUCCEEDED — text-only analysis generated.`);
+              continue; // Skip the placeholder fallback below
+            } catch (fallbackError) {
+              console.error(`[Orchestrator] Fallback API for "${lens}" also FAILED:`, fallbackError);
+              // Fall through to placeholder annotations
+            }
+          }
+
+          // Ultimate fallback: placeholder annotations
+          console.error(`[Orchestrator] Lens "${lens}" — all APIs failed. Using placeholder annotations.`);
+          const placeholderAnnotations = generateDefaultAnnotations([lens]);
+          allAnnotations.push(...placeholderAnnotations);
           const isNetworkError = errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('abort') || errorMsg.includes('timeout');
           allAnalysisParts.push(
             `**${lens.toUpperCase()} Analysis — Temporary Failure**\n\n` +
