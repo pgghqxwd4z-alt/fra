@@ -379,8 +379,8 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     shouldRunValidator: true,
     shouldRunKnowledgeSearch: true,
     shouldFetchMarketData: true,
-    delayBeforeNextCallMs: Math.max(2000, Math.min(optimalDelay, 3500)),
-    reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${Math.max(2000, Math.min(optimalDelay, 3500))}ms.`
+    delayBeforeNextCallMs: Math.max(5000, Math.min(optimalDelay, 8000)),
+    reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${Math.max(5000, Math.min(optimalDelay, 8000))}ms.`
   };
 }
 
@@ -1740,8 +1740,8 @@ IMPORTANT:
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
           if (!isRateLimit) {
             try {
-              console.log(`[Orchestrator] Fallback API for "${lens}": Using text-only llama-3.3-70b-versatile...`);
-              await new Promise(resolve => setTimeout(resolve, 2000)); // Brief cooldown before fallback
+              console.log(`[Orchestrator] Fallback API for "${lens}": Using fast llama-3.1-8b-instant (text-only)...`);
+              await new Promise(resolve => setTimeout(resolve, 5000)); // 5s cooldown to let API recover
 
               const fallbackMessages: GroqMessage[] = [
                 {
@@ -1777,7 +1777,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.3-70b-versatile', 2, `fallback-${lens}`);
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 3, `fallback-${lens}`);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
