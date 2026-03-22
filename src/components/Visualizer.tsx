@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiService';
 
-type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
+type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
@@ -183,10 +183,11 @@ const Visualizer: React.FC = () => {
   };
 
   const lenses: { id: AnalysisLens; label: string; icon: string; color: string }[] = [
-    { id: 'smc', label: 'SMC Protocol', icon: 'fa-fingerprint', color: 'text-emerald-500' },
-    { id: 'gs', label: 'Goldman Desk', icon: 'fa-building-columns', color: 'text-sky-400' },
-    { id: 'psych', label: 'Douglas/Schwager', icon: 'fa-brain', color: 'text-rose-400' },
-    { id: 'ppa', label: 'Price Action', icon: 'fa-chart-simple', color: 'text-amber-400' },
+    { id: 'psych', label: 'Douglas/Schwager Axis', icon: 'fa-brain', color: 'text-rose-400' },
+    { id: 'gs', label: 'Goldman Sachs Strategy', icon: 'fa-building-columns', color: 'text-sky-400' },
+    { id: 'smc', label: 'SMC Mechanics', icon: 'fa-fingerprint', color: 'text-emerald-500' },
+    { id: 'ppa', label: 'Pure Price Action', icon: 'fa-chart-simple', color: 'text-amber-400' },
+    { id: 'isyn', label: 'Inst. Synthesis', icon: 'fa-layer-group', color: 'text-violet-400' },
   ];
 
   return (
@@ -483,32 +484,40 @@ const Visualizer: React.FC = () => {
                     <div key={lensId} className="space-y-2">
                       <h5 className={`text-[8px] font-bold ${lens.color} opacity-60 uppercase tracking-widest border-l border-current pl-2`}>{lens.label}</h5>
                       <div className="space-y-2 pl-2">
-                        {lensId === 'smc' && (
+                        {lensId === 'psych' && (
                           <>
-                            <LegendItem color="bg-emerald-500" label="Order Blocks" desc="Institutional resting orders" />
-                            <LegendItem color="bg-sky-500" label="FVG" desc="Inefficiency gaps" />
-                            <LegendItem color="bg-green-400" label="Inst. Buy Zone" desc="Institutional accumulation" />
-                            <LegendItem color="bg-red-400" label="Inst. Sell Zone" desc="Institutional distribution" />
+                            <LegendItem color="bg-rose-600" label="Accepting Randomness" desc="Probabilistic mindset" />
+                            <LegendItem color="bg-red-500" label="Risk-First Mentality" desc="Define risk before entry" />
+                            <LegendItem color="bg-rose-400" label="Outcome Detachment" desc="Process over results" />
                           </>
                         )}
                         {lensId === 'gs' && (
                           <>
-                            <LegendItem color="bg-blue-500" label="Inst. Flow" desc="Primary trend narrative" />
-                            <LegendItem color="bg-purple-500" label="Voids" desc="Liquidity vacuum areas" />
-                            <LegendItem color="bg-green-400" label="GS Buy Zone" desc="Goldman/bank accumulation" />
-                            <LegendItem color="bg-red-400" label="GS Sell Zone" desc="Goldman/bank distribution" />
+                            <LegendItem color="bg-blue-500" label="Inter-market Flow" desc="Institutional capital flow" />
+                            <LegendItem color="bg-purple-500" label="Liquidity Voids" desc="Vacuum areas to fill" />
+                            <LegendItem color="bg-cyan-400" label="Macro Divergence" desc="Institutional vs retail" />
                           </>
                         )}
-                        {lensId === 'psych' && (
+                        {lensId === 'smc' && (
                           <>
-                            <LegendItem color="bg-rose-600" label="Fear Zones" desc="Retail liquidation triggers" />
-                            <LegendItem color="bg-red-500" label="Stops" desc="Clustered retail risk" />
+                            <LegendItem color="bg-emerald-500" label="Order Blocks" desc="Institutional resting orders" />
+                            <LegendItem color="bg-sky-500" label="FVG Imbalances" desc="Inefficiency gaps" />
+                            <LegendItem color="bg-green-400" label="Institutional Flow" desc="Smart money footprints" />
                           </>
                         )}
                         {lensId === 'ppa' && (
                           <>
-                            <LegendItem color="bg-white" label="S/R" desc="Major psych levels" />
-                            <LegendItem color="bg-amber-400" label="Patterns" desc="Candle stick formations" />
+                            <LegendItem color="bg-amber-400" label="LTF Confirmation" desc="Lower timeframe signals" />
+                            <LegendItem color="bg-yellow-500" label="CHoCH/BOS" desc="Structure break triggers" />
+                            <LegendItem color="bg-white" label="Candlestick Triggers" desc="Entry confirmation patterns" />
+                          </>
+                        )}
+                        {lensId === 'isyn' && (
+                          <>
+                            <LegendItem color="bg-violet-500" label="Confluence Zone" desc="Multi-framework convergence" />
+                            <LegendItem color="bg-green-400" label="Inst. Entry" desc="Probabilistic long entry" />
+                            <LegendItem color="bg-red-400" label="Inst. Exit" desc="Probabilistic short/exit" />
+                            <LegendItem color="bg-cyan-400" label="Execution Tier" desc="Bank-level priority ranking" />
                           </>
                         )}
                       </div>

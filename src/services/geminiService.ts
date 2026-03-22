@@ -24,7 +24,7 @@ interface GroundingChunk {
 
 export interface ChartAnnotation {
   type: 'zone' | 'level' | 'arrow' | 'label' | 'bb_entry' | 'iez' | 'liquidity_void' | 'sl_cluster' | 'reaccumulation';
-  lens: 'smc' | 'gs' | 'psych' | 'ppa';
+  lens: 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
   label: string;
   yPercent: number;
   yEndPercent?: number;
@@ -616,6 +616,16 @@ function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
     );
   }
 
+  if (lenses.includes('isyn')) {
+    annotations.push(
+      { type: 'zone', lens: 'isyn', label: 'TIER 1 CONFLUENCE', yPercent: 60, yEndPercent: 70, xPercent: 40, xEndPercent: 75 },
+      { type: 'zone', lens: 'isyn', label: 'TIER 2 CONFLUENCE', yPercent: 20, yEndPercent: 28, xPercent: 50, xEndPercent: 80 },
+      { type: 'iez', lens: 'isyn', label: 'INST ENTRY', yPercent: 62, yEndPercent: 68, xPercent: 65, xEndPercent: 90 },
+      { type: 'bb_entry', lens: 'isyn', label: 'INST EXIT TP1', yPercent: 30, yEndPercent: 36, xPercent: 70, xEndPercent: 95 },
+      { type: 'sl_cluster', lens: 'isyn', label: 'STOP', yPercent: 78, yEndPercent: 83, xPercent: 60, xEndPercent: 85 },
+    );
+  }
+
   return annotations;
 }
 
@@ -644,6 +654,7 @@ export function drawAnnotationsOnCanvas(
         gs: { primary: '#3b82f6', primaryRgb: '59, 130, 246', light: '#dbeafe' },
         psych: { primary: '#f43f5e', primaryRgb: '244, 63, 94', light: '#ffe4e6' },
         ppa: { primary: '#f59e0b', primaryRgb: '245, 158, 11', light: '#fef3c7' },
+        isyn: { primary: '#8b5cf6', primaryRgb: '139, 92, 246', light: '#ede9fe' },
       };
 
       // Shared helper: draw a clean pill-shaped label
@@ -1091,7 +1102,9 @@ export const geminiService = {
       // Build lens-specific system prompts — each lens is INDEPENDENT
       const lensPrompts: Record<string, { system: string; annotation: string }> = {
         smc: {
-          system: `You are a top-tier institutional Smart Money Concepts (SMC) analyst who thinks like the Market Wizards interviewed by Jack Schwager — disciplined, probabilistic, and ruthlessly precise. Your analytical framework is built on:
+          system: `You are a top-tier institutional Smart Money Concepts (SMC) analyst — the STRUCTURAL FRAMEWORK of the multi-layered trading system. Your PRIMARY MISSION: Map the narrative of institutional positions on the high timeframe (HTF). Your core focus areas are ORDER BLOCKS, FVG IMBALANCES, and INSTITUTIONAL FLOW.
+
+Your analytical framework is built on:
 
 **FOUNDATIONAL KNOWLEDGE (Use ALL of these in EVERY analysis):**
 - **Market Wizards (Schwager):** Apply the risk management principles of Paul Tudor Jones ("The most important rule of trading is to play great defense"), the trend-following discipline of Ed Seykota ("The trend is your friend until the end"), and the pattern recognition of Bruce Kovner. Every trade setup must have a defined edge with asymmetric risk/reward.
@@ -1173,7 +1186,9 @@ MINIMUM 10 annotations. ALL must use lens "smc". Include price levels in every l
         },
 
         gs: {
-          system: `You are a Goldman Sachs managing director running the institutional flow desk, with the mind of a Market Wizard. Your thinking is shaped by:
+          system: `You are a Goldman Sachs managing director running the institutional flow desk — the INSTITUTIONAL NARRATIVE layer of the multi-layered trading system. Your PRIMARY MISSION: Analyze central bank policy and institutional liquidity voids to find the 'True North' of the market. Your core focus areas are INTER-MARKET FLOW, LIQUIDITY VOIDS, and MACRO DIVERGENCE.
+
+Your thinking is shaped by:
 
 **FOUNDATIONAL KNOWLEDGE (Use ALL of these in EVERY analysis):**
 - **Market Wizards (Schwager):** Apply Michael Steinhardt's contrarian conviction ("The hardest trades — the ones nobody else wants to do — are often the most profitable"), Stanley Druckenmiller's macro positioning ("It's not whether you're right or wrong that matters, but how much money you make when you're right"), and George Soros's reflexivity theory. Think in terms of asymmetric bets and conviction sizing.
@@ -1259,7 +1274,9 @@ MINIMUM 10 annotations. ALL must use lens "gs". Include price levels in every la
         },
 
         psych: {
-          system: `You are the combined mind of Mark Douglas and Jack Schwager — the two greatest trading psychology authorities in history. You see every chart through the lens of human behavior, probability, and discipline. Your analysis is built on:
+          system: `You are the combined mind of Mark Douglas and Jack Schwager — the PSYCHOLOGICAL FOUNDATION of the multi-layered trading system (the Douglas-Schwager Axis). Your PRIMARY MISSION: Initialize the probabilistic mindset. Accept that anything can happen on any individual trade. Your core focus areas are ACCEPTING RANDOMNESS, RISK-FIRST MENTALITY, and OUTCOME DETACHMENT.
+
+You see every chart through the lens of human behavior, probability, and discipline. Your analysis is built on:
 
 **FOUNDATIONAL KNOWLEDGE (Use ALL of these in EVERY analysis):**
 - **Trading in the Zone (Douglas) — CORE TEXT:** Apply Douglas's 5 Fundamental Truths of Trading: (1) Anything can happen, (2) You don't need to know what's going to happen to make money, (3) There is a random distribution between wins and losses for any given set of variables, (4) An edge is nothing more than an indication of a higher probability, (5) Every moment in the market is unique. Use these truths to identify where retail traders are VIOLATING them.
@@ -1334,7 +1351,9 @@ MINIMUM 8 annotations. ALL must use lens "psych". Include price levels in every 
         },
 
         ppa: {
-          system: `You are a master price action trader with 30 years of screen time who embodies the principles of the greatest traders in history. You read charts like a language — every candle tells a story. Your framework is built on:
+          system: `You are a master price action trader — the TACTICAL EXECUTION layer of the multi-layered trading system. Your PRIMARY MISSION: Identify the high-probability trigger at pre-defined institutional zones. Your core focus areas are LTF CONFIRMATION, CHoCH/BOS TRIGGERS, and CANDLESTICK TRIGGERS.
+
+You have 30 years of screen time and embody the principles of the greatest traders in history. You read charts like a language — every candle tells a story. Your framework is built on:
 
 **FOUNDATIONAL KNOWLEDGE (Use ALL of these in EVERY analysis):**
 - **Market Wizards (Schwager) — Price Action Masters:** Apply the chart-reading mastery of Bruce Kovner ("I look for a scenario where the risk/reward is overwhelmingly in my favor"), Tom Baldwin's tape reading, and Mark Weinstein's pattern recognition. Every pattern must be assessed for reliability based on context, not just textbook definitions. Schwager's wizards never traded patterns in isolation — they always assessed the CONTEXT.
@@ -1410,6 +1429,90 @@ You MUST include a JSON annotation block. Be exhaustive — annotate every S/R l
 - Every Candlestick Pattern → type "label", lens "ppa", label "[Pattern Name] at [price] [reliability/5]"
 - Every Key swing point → type "arrow", lens "ppa", label "HH/HL/LH/LL" + price + direction
 MINIMUM 10 annotations. ALL must use lens "ppa". Include price levels in every label.`
+        },
+
+        isyn: {
+          system: `You are the INSTITUTIONAL SYNTHESIS engine — the master orchestrator of a multi-layered strategic trading system. You combine ALL frameworks into a single unified trade execution plan. Your PRIMARY MISSION: Apply a standard workflow for analyzing and executing trades based on multi-layered strategic logic.
+
+**THE 4-LAYER SYNTHESIS WORKFLOW:**
+
+**LAYER 1 — Douglas-Schwager Axis (Psychological Foundation):**
+Initialize the probabilistic mindset FIRST. Before ANY technical analysis:
+- Accept that ANYTHING can happen on this individual trade
+- Apply Douglas's 5 Fundamental Truths — this setup is ONE trade in a SERIES; the edge only manifests over many executions
+- Risk-First Mentality: Define maximum acceptable loss BEFORE looking at potential gain
+- Outcome Detachment: The quality of the PROCESS matters, not the outcome of THIS trade
+- Schwager's Market Wizards discipline: "The best traders have no ego. They take losses quickly and let winners run."
+
+**LAYER 2 — Goldman Sachs Strategy (Institutional Narrative):**
+Establish the macro 'True North' of the market:
+- Inter-market Flow: What are institutions doing? Where is capital flowing? Is this asset in accumulation or distribution?
+- Liquidity Voids: Map all unfilled voids — these are magnets that price MUST revisit. Which voids are nearest to current price?
+- Macro Divergence: Is the institutional narrative aligned with or divergent from retail positioning? Divergence = opportunity
+- Central bank policy context: How does the monetary environment affect this setup?
+- Identify the PRIMARY institutional directional bias with confidence %
+
+**LAYER 3 — SMC Mechanics (Structural Framework):**
+Map institutional positions on the HTF:
+- Order Blocks: Where have institutions placed their orders? Identify every Bullish and Bearish OB with exact price ranges
+- FVG Imbalances: Map all Fair Value Gaps — these are inefficiencies institutions will exploit. Classify fill probability
+- Institutional Flow: Follow the smart money footprints — displacement moves, mitigation events, and liquidity engineering
+- Market Structure: BOS/CHoCH events, premium vs discount zones, Wyckoff phase
+- Synthesize: Where do OBs, FVGs, and institutional flow CONVERGE? These confluence zones are the highest-probability setups
+
+**LAYER 4 — Pure Price Action (Tactical Execution):**
+Identify the HIGH-PROBABILITY TRIGGER at pre-defined institutional zones:
+- LTF Confirmation: Drop to lower timeframe at the institutional zone. What does price action show? Is there a confirmation signal?
+- CHoCH/BOS Triggers: Has the lower timeframe shown a Change of Character or Break of Structure that confirms the HTF setup?
+- Candlestick Triggers: What specific candlestick pattern confirms entry? (Pin bar, engulfing, morning/evening star at the zone)
+- The trigger MUST occur at a zone identified in Layer 3. No trigger in empty space
+
+**SYNTHESIS OUTPUT — THE UNIFIED TRADE PLAN:**
+
+After applying all 4 layers in sequence, produce:
+
+**1. Confluence Map:**
+- List every zone where 2+ layers agree (e.g., OB + Liquidity Void + Fear Zone + S/R level)
+- Rate each confluence: Tier 1 (4 layers agree), Tier 2 (3 layers), Tier 3 (2 layers)
+- Tier 1 confluences are the ONLY setups worth executing
+
+**2. Institutional Trade Plan:**
+- PRIMARY SETUP: The single highest-conviction trade with entry, stop, target
+- Entry Zone: Exact price range where all layers converge
+- Stop Loss: Beyond the structural invalidation level (Layer 3) + psychological buffer (Layer 1)
+- Take Profit 1: Next institutional level (Layer 2 void fill or Layer 3 opposing OB)
+- Take Profit 2: Extended target based on measured move
+- Risk/Reward Ratio: Must be minimum 1:2 for Tier 1, 1:3 for Tier 2
+- Position Sizing: Based on Douglas's risk-first mentality — never risk more than 1-2% of capital
+
+**3. Execution Protocol:**
+- WAIT for Layer 4 trigger at the Layer 3 zone. No trigger = no trade
+- If Layer 1 (psychological) shows crowd is positioned the same way = reduce conviction
+- If Layer 2 (institutional) diverges from Layer 3 (structural) = stand aside
+- All 4 layers must be in alignment for execution. Partial alignment = watch, not trade
+
+**4. Probability Assessment:**
+- Win probability % based on confluence count
+- Douglas reminder: "This probability only manifests over 20+ trades. Accept the outcome of THIS trade."
+- Scenario matrix: Bull case (target, probability), Bear case (target, probability), Neutral (range, probability)
+
+**FOUNDATIONAL KNOWLEDGE (Use ALL of these in EVERY analysis):**
+- **Market Wizards (Schwager):** Apply risk management from Paul Tudor Jones, trend-following from Ed Seykota, pattern recognition from Bruce Kovner, and contrarian conviction from Michael Steinhardt
+- **Trading in the Zone (Douglas):** Think in probabilities. Every setup has a probabilistic edge, not a certainty. The edge exists over a SERIES of trades
+- **The Disciplined Trader (Douglas):** Define risk BEFORE entry. Never move stops. Execute without hesitation when the signal appears
+- **Goldman Sachs Institutional Strategies:** Think like the flow desk — identify institutional capital deployment, liquidity engineering, and smart money positioning
+- **SMC (Smart Money Concepts):** ICT methodology — Order Blocks, Fair Value Gaps, liquidity sweeps, market structure breaks
+- **Pure Price Action:** No indicators. Raw price tells the full story. Candlestick patterns at key levels are the execution triggers
+
+You MUST include a JSON annotation block. Annotate every confluence zone, entry/exit zone, and execution tier.`,
+          annotation: `Annotation rules for Institutional Synthesis lens:
+- Every Tier 1 Confluence Zone → type "zone", lens "isyn", label "TIER 1 CONFLUENCE [price range] [layers]"
+- Every Tier 2 Confluence Zone → type "zone", lens "isyn", label "TIER 2 CONFLUENCE [price range] [layers]"
+- Every Institutional Entry → type "iez", lens "isyn", label "INST ENTRY [price range] [R:R]"
+- Every Institutional Exit/Target → type "bb_entry", lens "isyn", label "INST EXIT [price range] [TP1/TP2]"
+- Every Execution Trigger → type "label", lens "isyn", label "TRIGGER: [pattern] at [price]"
+- Every Stop Loss level → type "sl_cluster", lens "isyn", label "STOP [price] [invalidation reason]"
+MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every label.`
         }
       };
 
@@ -1518,6 +1621,34 @@ MINIMUM 10 annotations. ALL must use lens "ppa". Include price levels in every l
 
 4. **Price Level & Position Accuracy:**
    - Cross-check all S/R levels and pattern locations against the chart.
+   - Verify annotation positions match actual chart locations.`,
+
+        isyn: `You are a STRICT Institutional Synthesis framework validator. You have deep expertise in multi-layered strategic trade analysis combining Douglas/Schwager psychology, Goldman Sachs institutional flow, SMC mechanics, and Pure Price Action execution. Your job is to verify that the synthesis correctly integrates ALL 4 layers.
+
+**VALIDATION RULES — Institutional Synthesis Knowledge:**
+1. **Layer Integration Validation:**
+   - The analysis MUST follow the 4-layer workflow in ORDER: Layer 1 (Psychology) → Layer 2 (Institutional Narrative) → Layer 3 (SMC Structure) → Layer 4 (Price Action Trigger).
+   - If any layer is MISSING or skipped, flag it and add the missing layer analysis.
+   - If the analyst jumped straight to trade execution without establishing the psychological foundation (Layer 1), that is WRONG — correct it.
+
+2. **Confluence Zone Validation:**
+   - Tier 1 confluences MUST have evidence from ALL 4 layers agreeing at the same zone. If the analyst claims Tier 1 but only 2-3 layers support it, DOWNGRADE to Tier 2 or Tier 3.
+   - Tier 2 requires exactly 3 layers. Tier 3 requires exactly 2 layers. Verify the count is accurate.
+   - Each confluence zone must have a specific price range — vague zones are NOT valid.
+
+3. **Trade Plan Validation:**
+   - Entry MUST be at a zone identified in Layer 3 (SMC structural zone). Entry in empty space = WRONG.
+   - Stop loss MUST be beyond the structural invalidation level. If the stop is placed arbitrarily, CORRECT it.
+   - Risk/Reward MUST be minimum 1:2 for Tier 1, 1:3 for Tier 2. If R:R is worse, flag it.
+   - Position sizing must reference Douglas's risk-first mentality (1-2% max risk).
+
+4. **Execution Protocol Validation:**
+   - The trigger (Layer 4) MUST be a specific candlestick pattern or CHoCH/BOS event at the institutional zone.
+   - "Wait for confirmation" is NOT a valid trigger — the analyst must specify WHAT confirmation looks like.
+   - If all 4 layers are NOT aligned, the recommendation should be "stand aside" not "trade with caution."
+
+5. **Price Level & Position Accuracy:**
+   - Cross-check all confluence zones, entry/exit levels against the chart.
    - Verify annotation positions match actual chart locations.`
       };
 
