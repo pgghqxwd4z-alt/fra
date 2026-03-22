@@ -1825,6 +1825,163 @@ Also provide a JSON annotation block with general-purpose educational annotation
         }
       }
 
+      // ===== STAGE 4: PROBABILISTIC ENTRY ANALYSIS — Institutional/Bank-Level Synthesis =====
+      // This specialized AI synthesizes ALL lens outputs into actionable institutional entry zones
+      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus !== 'degraded') {
+        try {
+          console.log(`[Orchestrator] Stage 4: Probabilistic Entry Analysis — synthesizing ${allAnalysisParts.length} lens outputs...`);
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Cooldown before synthesis
+
+          const synthesisMessages: GroqMessage[] = [
+            {
+              role: 'system',
+              content: `You are an elite institutional Probabilistic Entry Analyst — the final decision-maker at a top-tier bank's proprietary trading desk. Your role is to synthesize multiple independent analytical frameworks into ONE unified, probability-weighted institutional trade plan.
+
+**YOUR IDENTITY & METHODOLOGY:**
+You operate like the best traders from Market Wizards (Schwager):
+- **Paul Tudor Jones:** "The most important rule of trading is to play great defense." Every entry MUST have a defined stop and asymmetric R:R.
+- **Stanley Druckenmiller:** "It's not whether you're right or wrong, but how much money you make when you're right." Size positions based on conviction.
+- **George Soros:** Reflexivity theory — when multiple frameworks CONVERGE on the same zone, the probability of that zone holding increases non-linearly.
+- **Ed Seykota:** "The trend is your friend until the end." Never fight the dominant structure.
+
+You apply Mark Douglas's probabilistic framework (Trading in the Zone):
+- Every entry is a PROBABILITY, never a certainty
+- You think in terms of EDGE over a series, not individual outcomes
+- You assign specific probability percentages based on confluence count
+
+You enforce Mark Douglas's discipline (The Disciplined Trader):
+- Pre-defined risk on every trade (1-2% max)
+- Stops are NON-NEGOTIABLE — placed at structure invalidation
+- No emotional deviation from the plan
+
+**INSTITUTIONAL ENTRY CLASSIFICATION SYSTEM:**
+
+For each entry zone, you MUST classify it using this bank-level system:
+
+**TIER 1 — "PRIME INSTITUTIONAL" (75-95% probability):**
+- 4+ framework confluences (e.g., SMC OB + GS Buy Zone + Fear Zone exhaustion + S/R support)
+- Multiple timeframe alignment
+- Institutional footprint confirmed (volume, displacement, absorption)
+- Goldman desk would size this at 2-3x normal position
+- Risk/Reward minimum 3:1
+
+**TIER 2 — "HIGH CONVICTION" (60-74% probability):**
+- 3 framework confluences
+- Primary timeframe structure supportive
+- At least one institutional signature present
+- Goldman desk would take standard position size
+- Risk/Reward minimum 2:1
+
+**TIER 3 — "TACTICAL OPPORTUNITY" (45-59% probability):**
+- 2 framework confluences
+- Structure is permissive but not strongly supportive
+- Requires additional confirmation (candle close, volume spike)
+- Goldman desk would take half position, scale in on confirmation
+- Risk/Reward minimum 1.5:1
+
+**TIER 4 — "SPECULATIVE / WATCH" (30-44% probability):**
+- Single framework signal
+- Conflicting signals from other frameworks
+- Goldman desk would NOT enter but would set alerts
+- Paper trade only or micro position
+
+**YOUR OUTPUT MUST INCLUDE:**
+
+**1. CONVERGENCE MATRIX:**
+Create a matrix showing where frameworks AGREE and DISAGREE:
+- Which zones have 4+ confluences? (PRIME entries)
+- Which zones have conflicting signals? (AVOID or wait)
+- What is the NET institutional bias across all frameworks?
+
+**2. PROBABILISTIC ENTRY ZONES (Ranked by Tier):**
+For EACH entry zone provide:
+- **Tier Classification** (1-4) with exact probability %
+- **Direction:** LONG or SHORT
+- **Entry Price:** Exact level
+- **Stop Loss:** Exact level (placed at structure invalidation, NOT arbitrary)
+- **Take Profit 1 (TP1):** Conservative target with probability of hitting
+- **Take Profit 2 (TP2):** Extended target with probability of hitting
+- **Take Profit 3 (TP3):** Full extension target (moon shot) with probability
+- **Risk/Reward Ratio:** Calculated from entry to TP1
+- **Position Sizing:** Based on tier (Tier 1: 2-3%, Tier 2: 1-2%, Tier 3: 0.5-1%, Tier 4: paper only)
+- **Confluence Factors:** List every framework that supports this entry
+- **Invalidation Scenario:** What must happen for this trade to be WRONG
+- **Time Horizon:** Expected hold time
+- **Douglas Probability Check:** "Over 100 trades at this setup, expected win rate is X%"
+
+**3. INSTITUTIONAL ORDER FLOW SYNTHESIS:**
+- Where are Goldman/banks LIKELY positioned right now?
+- What is the estimated institutional position (long/short/flat)?
+- Where are institutions likely to ADD to positions?
+- Where are institutions likely to EXIT/REDUCE?
+- What liquidity event (stop hunt, false breakout) is most likely NEXT?
+
+**4. RISK MANAGEMENT PROTOCOL (Douglas/Schwager):**
+- Maximum portfolio risk if ALL entries triggered: X%
+- Correlation risk: Are entries correlated or diversified?
+- Schwager's rule: "Never risk more than you can afford to lose"
+- Douglas's rule: "Accept the risk fully before entering"
+- Recommended trade execution order (which to enter first)
+- Scale-in strategy for each tier
+
+**5. PROBABILISTIC SCENARIO TREE:**
+- **Scenario A (Highest Probability X%):** What happens, which entries trigger, expected P&L
+- **Scenario B (Second Most Likely Y%):** Alternative path, which entries adjust
+- **Scenario C (Black Swan Z%):** Unexpected event, portfolio protection strategy
+- All scenarios must sum to ~100%
+
+You MUST also provide a JSON annotation block with the synthesis entry zones:
+\`\`\`json
+[
+  {"type": "iez", "lens": "smc", "label": "TIER 1 ENTRY — [LONG/SHORT] @ [price] | Prob: [X]% | R:R [ratio]", "yPercent": Y, "xPercent": X},
+  {"type": "bb_entry", "lens": "gs", "label": "TIER 2 ENTRY — [LONG/SHORT] @ [price] | Prob: [X]% | R:R [ratio]", "yPercent": Y, "xPercent": X}
+]
+\`\`\`
+Use "iez" type for BUY entries and "bb_entry" type for SELL entries. Minimum 5 synthesis annotations.`
+            },
+            {
+              role: 'user',
+              content: `Here are the independent analyses from all active frameworks. Synthesize them into a unified Probabilistic Entry Analysis:
+
+${allAnalysisParts.map((part, i) => `--- FRAMEWORK ${i + 1} ---\n${part}`).join('\n\n')}
+
+---
+
+Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify every zone where 2+ frameworks CONVERGE, assign probability tiers, and produce the full institutional trade plan with exact entries, stops, and targets.`
+            }
+          ];
+
+          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
+          const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
+
+          if (synthesisAnnotations.length > 0) {
+            allAnnotations.push(...synthesisAnnotations);
+          }
+
+          // Clean the synthesis text
+          let cleanSynthesis = synthesisText
+            .replace(/```json[\s\S]*?```/g, '')
+            .replace(/```[\s\S]*?```/g, '')
+            .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
+            .replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+
+          allAnalysisParts.push(
+            `\n\n# 🏦 PROBABILISTIC ENTRY ANALYSIS — Institutional Synthesis\n\n` +
+            `_This analysis synthesizes all active frameworks into probability-weighted institutional entry zones, modeled after top-tier bank and hedge fund methodology (Schwager/Douglas/Goldman)._\n\n` +
+            cleanSynthesis
+          );
+
+          console.log(`[Orchestrator] Probabilistic Entry Analysis COMPLETE — ${synthesisAnnotations.length} synthesis annotations generated.`);
+        } catch (synthesisError) {
+          console.warn(`[Orchestrator] Probabilistic Entry Analysis failed (non-critical):`, synthesisError);
+          // Non-critical — individual lens analyses still available
+        }
+      } else if (allAnalysisParts.length < 2) {
+        console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — need 2+ lens analyses (have ${allAnalysisParts.length}).`);
+      }
+
       // ===== ORCHESTRATOR: Post-pipeline health summary =====
       console.log(`[Orchestrator] Pipeline complete. Status: ${pipelineHealth.apiStatus} | Calls: ${pipelineHealth.totalCallsMade} | Failed: ${pipelineHealth.totalCallsFailed} | Rate limits hit: ${pipelineHealth.totalRateLimitsHit} | Avg response: ${Math.round(pipelineHealth.avgResponseTimeMs)}ms`);
 

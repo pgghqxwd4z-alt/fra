@@ -64,10 +64,10 @@ function runMonteCarloSimulation(
       if (Math.random() < winProb / 100) {
         const win = riskAmount * rewardRisk;
         equity += win;
-        if (sim === 0) { totalWins++; totalWinAmount += win; }
+        totalWins++; totalWinAmount += win;
       } else {
         equity -= riskAmount;
-        if (sim === 0) { totalLosses++; totalLossAmount += riskAmount; }
+        totalLosses++; totalLossAmount += riskAmount;
       }
       curve.push(Math.max(0, equity));
     }
