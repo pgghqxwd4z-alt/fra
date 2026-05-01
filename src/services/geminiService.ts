@@ -495,7 +495,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = 8192): Promise<string> {
   const headers = getGroqHeaders();
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -511,7 +511,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
           model,
           messages,
           temperature: 0.7,
-          max_tokens: 8192,
+          max_tokens: maxTokens,
         }),
         signal: controller.signal,
       });
@@ -1107,7 +1107,7 @@ export const geminiService = {
 
       messages.push({ role: 'user', content: prompt });
 
-      const text = await callGroq(messages);
+      const text = await callGroq(messages, 'llama-3.3-70b-versatile', 3, 'chat-advisor', 1024);
 
       return { text, grounding: groundingChunks.length > 0 ? groundingChunks : undefined };
     } catch (error) {
