@@ -905,15 +905,15 @@ export function drawAnnotationsOnCanvas(
           const y1 = ann.yPercent / 100 * h;
           const y2 = (ann.yEndPercent ?? ann.yPercent + 5) / 100 * h;
 
-          // Clean subtle hatched fill
+          // Clean subtle hatched fill — use lens palette so gs/isyn voids are visually distinct
           const grad = ctx.createLinearGradient(x1, y1, x1, y2);
-          grad.addColorStop(0, 'rgba(139, 92, 246, 0.10)');
-          grad.addColorStop(1, 'rgba(139, 92, 246, 0.04)');
+          grad.addColorStop(0, `rgba(${rgb}, 0.10)`);
+          grad.addColorStop(1, `rgba(${rgb}, 0.04)`);
           ctx.fillStyle = grad;
           ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
 
           // Thin top/bottom lines
-          ctx.strokeStyle = 'rgba(139, 92, 246, 0.5)';
+          ctx.strokeStyle = `rgba(${rgb}, 0.5)`;
           ctx.lineWidth = 1;
           ctx.setLineDash([4, 3]);
           ctx.beginPath();
@@ -931,7 +931,7 @@ export function drawAnnotationsOnCanvas(
           const lh = fontSize + pad * 1.4;
           const cx = (x1 + x2) / 2;
           const adjY = findClearY(cx - lw / 2, (y1 + y2) / 2 - lh / 2, lw, lh);
-          const rect = drawLabel(ann.label, cx, adjY, '139, 92, 246', '#ede9fe', 'center');
+          const rect = drawLabel(ann.label, cx, adjY, rgb, colors.light, 'center');
           usedRects.push(rect);
 
         } else if (ann.type === 'sl_cluster') {
@@ -940,19 +940,19 @@ export function drawAnnotationsOnCanvas(
           const y1 = ann.yPercent / 100 * h;
           const y2 = (ann.yEndPercent ?? ann.yPercent + 5) / 100 * h;
 
-          // Subtle red zone
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.06)';
+          // Subtle lens-tinted zone — use lens palette so psych/isyn stops render in their own color
+          ctx.fillStyle = `rgba(${rgb}, 0.06)`;
           ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
 
           // Thin dashed border
-          ctx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
+          ctx.strokeStyle = `rgba(${rgb}, 0.45)`;
           ctx.lineWidth = 1;
           ctx.setLineDash([3, 3]);
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
           ctx.setLineDash([]);
 
           // Small X markers (fewer, cleaner, no randomness)
-          ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+          ctx.strokeStyle = `rgba(${rgb}, 0.5)`;
           ctx.lineWidth = 1;
           const xSize = Math.max(3, Math.round(w * 0.005));
           const cols = Math.min(4, Math.max(2, Math.floor((x2 - x1) / (xSize * 10))));
@@ -978,7 +978,7 @@ export function drawAnnotationsOnCanvas(
           const lw = tm.width + pad * 2;
           const lh = fontSize + pad * 1.4;
           const adjY = findClearY(x1 + 4, y1 + 3, lw, lh);
-          const rect = drawLabel(ann.label, x1 + 4, adjY, '239, 68, 68', '#fee2e2');
+          const rect = drawLabel(ann.label, x1 + 4, adjY, rgb, colors.light);
           usedRects.push(rect);
 
         } else if (ann.type === 'reaccumulation') {
