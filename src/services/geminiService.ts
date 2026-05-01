@@ -1885,6 +1885,7 @@ IMPORTANT:
                     lens === 'smc' ? 'Smart Money Concepts (Order Blocks, FVGs, institutional zones)'
                     : lens === 'gs' ? 'Goldman Sachs institutional flow analysis (liquidity voids, dark pools, institutional positioning)'
                     : lens === 'psych' ? 'trading psychology (fear zones, retail liquidation triggers, stop clusters)'
+                    : lens === 'isyn' ? 'multi-layered institutional synthesis (Layer 1 Douglas/Schwager psychology → Layer 2 Goldman institutional narrative → Layer 3 SMC structural framework → Layer 4 pure price action execution; produces tier-classified confluence zones and unified trade plans)'
                     : 'pure price action (support/resistance, candlestick patterns, trendlines)'
                   }, provide a GENERAL analytical framework and educational analysis that a trader would use on any chart.
 
@@ -1900,9 +1901,9 @@ Since the chart image is unavailable, provide:
 Also provide a JSON annotation block with general-purpose educational annotations:
 \`\`\`json
 [
-  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Look for Order Blocks at swing points' : lens === 'gs' ? 'Identify Institutional Flow direction' : lens === 'psych' ? 'Map Fear/Greed Zones' : 'Mark Key S/R Levels'}", "yPercent": 20, "xPercent": 15},
-  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Check FVGs for unfilled gaps' : lens === 'gs' ? 'Locate Liquidity Voids' : lens === 'psych' ? 'Identify Stop Clusters' : 'Confirm with Candlestick Patterns'}", "yPercent": 50, "xPercent": 50},
-  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Identify Inst. Buy/Sell Zones' : lens === 'gs' ? 'Map GS Buy/Sell Zones' : lens === 'psych' ? 'Spot Retail Liquidation Triggers' : 'Assess Trend Structure'}", "yPercent": 80, "xPercent": 75}
+  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Look for Order Blocks at swing points' : lens === 'gs' ? 'Identify Institutional Flow direction' : lens === 'psych' ? 'Map Fear/Greed Zones' : lens === 'isyn' ? 'Layer 1: Probabilistic mindset baseline' : 'Mark Key S/R Levels'}", "yPercent": 20, "xPercent": 15},
+  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Check FVGs for unfilled gaps' : lens === 'gs' ? 'Locate Liquidity Voids' : lens === 'psych' ? 'Identify Stop Clusters' : lens === 'isyn' ? 'Layers 2-3: Institutional + SMC confluence' : 'Confirm with Candlestick Patterns'}", "yPercent": 50, "xPercent": 50},
+  {"type": "label", "lens": "${lens}", "label": "${lens === 'smc' ? 'Identify Inst. Buy/Sell Zones' : lens === 'gs' ? 'Map GS Buy/Sell Zones' : lens === 'psych' ? 'Spot Retail Liquidation Triggers' : lens === 'isyn' ? 'Layer 4: Tier 1-3 confluence + trade plan' : 'Assess Trend Structure'}", "yPercent": 80, "xPercent": 75}
 ]
 \`\`\``
                 }
@@ -1958,7 +1959,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
 
       // ===== STAGE 4: PROBABILISTIC ENTRY ANALYSIS — Institutional/Bank-Level Synthesis =====
       // This specialized AI synthesizes ALL lens outputs into actionable institutional entry zones
-      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus !== 'degraded') {
+      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus === 'healthy') {
         try {
           console.log(`[Orchestrator] Stage 4: Probabilistic Entry Analysis — synthesizing ${allAnalysisParts.length} lens outputs...`);
           await new Promise(resolve => setTimeout(resolve, 5000)); // Cooldown before synthesis
