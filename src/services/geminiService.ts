@@ -1,16 +1,24 @@
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY?.trim() || '';
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
+const GROQ_API_URL = GROQ_PROXY_URL
+  ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions`
+  : 'https://api.groq.com/openai/v1/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
 
 function getGroqHeaders(): Record<string, string> {
-  if (!GROQ_API_KEY) {
-    throw new Error('Missing VITE_GROQ_API_KEY. Create .env.local with VITE_GROQ_API_KEY=your_groq_api_key and restart the dev server.');
+  if (!GROQ_PROXY_URL && !GROQ_API_KEY) {
+    throw new Error('Missing Groq configuration. Set VITE_GROQ_API_KEY for local development or VITE_GROQ_PROXY_URL for public deployments.');
   }
 
-  return {
-    'Authorization': `Bearer ${GROQ_API_KEY}`,
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
+
+  if (!GROQ_PROXY_URL) {
+    headers.Authorization = `Bearer ${GROQ_API_KEY}`;
+  }
+
+  return headers;
 }
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
