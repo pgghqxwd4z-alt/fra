@@ -773,7 +773,7 @@ export const geminiService = {
     }
   },
 
-  async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc']): Promise<AnnotateResponse> {
+  async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc'], mimeType: string = 'image/png'): Promise<AnnotateResponse> {
     try {
       const allAnalysisParts: string[] = [];
       const allAnnotations: ChartAnnotation[] = [];
@@ -808,7 +808,7 @@ Analyze this chart image using the ${lens.toUpperCase()} framework. Provide exha
                 {
                   inlineData: {
                     data: base64Image,
-                    mimeType: 'image/png'
+                    mimeType
                   }
                 },
                 { text: analysisPrompt }
@@ -866,7 +866,7 @@ Include a JSON annotation block with synthesis-level annotations using lens "isy
                 {
                   inlineData: {
                     data: base64Image,
-                    mimeType: 'image/png'
+                    mimeType
                   }
                 },
                 { text: synthesisPrompt }
@@ -875,7 +875,7 @@ Include a JSON annotation block with synthesis-level annotations using lens "isy
           });
 
           const synthesisText = synthesisResponse.text || '';
-          const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
+          const synthesisAnnotations = parseAnnotations(synthesisText, ['isyn']);
 
           if (synthesisAnnotations.length > 0) {
             allAnnotations.push(...synthesisAnnotations);
