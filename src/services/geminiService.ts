@@ -136,8 +136,8 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       recentHigh ? `50-candle High: ${recentHigh}` : '',
       recentLow ? `50-candle Low: ${recentLow}` : '',
       `Pivot Point: ${pivotPoint}`,
-      recentHigh && recentLow ? `R1: ${(2 * parseFloat(pivotPoint!) - recentLow).toFixed(2)}` : '',
-      recentHigh && recentLow ? `S1: ${(2 * parseFloat(pivotPoint!) - recentHigh).toFixed(2)}` : '',
+      recentHigh && recentLow && pivotPoint !== 'N/A' ? `R1: ${(2 * parseFloat(pivotPoint) - recentLow).toFixed(2)}` : '',
+      recentHigh && recentLow && pivotPoint !== 'N/A' ? `S1: ${(2 * parseFloat(pivotPoint) - recentHigh).toFixed(2)}` : '',
     ].filter(Boolean).join('\n');
 
     return {
