@@ -156,7 +156,8 @@ const Visualizer: React.FC = () => {
     setProcessing(true);
     try {
       const base64 = image.split(',')[1];
-      const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
+      const mimeType = image.split(',')[0]?.split(':')[1]?.split(';')[0] || 'image/png';
+      const result = await geminiService.annotateChart(base64, prompt, selectedLenses, mimeType);
       
       // Draw visual annotations on the chart image
       if (result.annotations && result.annotations.length > 0) {
@@ -173,7 +174,7 @@ const Visualizer: React.FC = () => {
       const msg = error instanceof Error ? error.message : String(error);
       const isRateLimit = msg.includes('429') || msg.includes('rate') || msg.includes('Rate');
       if (isRateLimit) {
-        alert("Rate limit reached. The Groq API allows 30 requests/min on the free tier. Please wait 30-60 seconds and try again.");
+        alert("Rate limit reached. The Gemini API has request limits. Please wait 30-60 seconds and try again.");
       } else {
         alert("Annotation engine error: " + msg.slice(0, 150) + ". Check console for details.");
       }
