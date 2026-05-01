@@ -241,6 +241,47 @@ async function fetchMarketData(analysisText: string): Promise<MarketDataContext 
   return null;
 }
 
+function buildMarketDataSection(marketData: MarketDataContext | null): string {
+  return marketData
+    ? `\n\n**EXTERNAL MARKET DATA (Live from ${marketData.source}):**
+Symbol: ${marketData.symbol}
+${marketData.keyLevels}
+${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData.recentCandles.length} candles):\n${marketData.recentCandles.slice(-5).map(c => `  ${c.time}: O=${c.open} H=${c.high} L=${c.low} C=${c.close}`).join('\n')}` : ''}
+
+**USE THIS DATA TO:**
+- Cross-reference price levels in the analysis against real market data.
+- Verify current price context and premium/discount assessment.
+- Check key round numbers, recent highs/lows, and pivot points.
+- Validate asset and timeframe correctness.`
+    : `\n\n**NOTE:** External market data could not be fetched for this asset. Rely on visual chart verification only.`;
+}
+
+function buildWebEvidenceSection(results: WebSearchResult[]): string {
+  if (results.length === 0) {
+    return '\n\n**WEB / NEWS / SENTIMENT SOURCES:** No live web/news evidence was returned. Do not invent sources; rely on the chart and market data.';
+  }
+
+  return `\n\n**WEB / NEWS / SENTIMENT SOURCES:**
+${results.slice(0, 6).map((result, index) => `${index + 1}. ${result.title}${result.url ? ` — ${result.url}` : ''}${result.snippet ? `\n   ${result.snippet}` : ''}`).join('\n')}`;
+}
+
+function buildLensResearchQuery(lens: string, symbol: string, prompt: string): string {
+  const asset = symbol || prompt || 'current market';
+  if (lens === 'smc') {
+    return `${asset} smart money concepts order blocks fair value gaps market structure institutional levels`;
+  }
+  if (lens === 'gs') {
+    return `${asset} institutional order flow liquidity levels market positioning macro catalyst`;
+  }
+  if (lens === 'psych') {
+    return `${asset} trader sentiment liquidation levels stop loss clusters market positioning`;
+  }
+  if (lens === 'ppa') {
+    return `${asset} technical analysis support resistance candlestick trend levels`;
+  }
+  return `${asset} institutional confluence technical analysis sentiment liquidity order flow`;
+}
+
 // ===== Google Search Grounding — Live News & Sentiment Verification =====
 interface WebSearchResult {
   title: string;
@@ -329,6 +370,7 @@ interface PipelineHealth {
 
 interface PipelineDecision {
   shouldRunValidator: boolean;
+  shouldRunVerifier: boolean;
   shouldRunKnowledgeSearch: boolean;
   shouldFetchMarketData: boolean;
   delayBeforeNextCallMs: number;
@@ -349,6 +391,7 @@ const pipelineHealth: PipelineHealth = {
     primary: { success: 0, failed: 0, avgMs: 0 },
     knowledge: { success: 0, failed: 0, avgMs: 0 },
     validator: { success: 0, failed: 0, avgMs: 0 },
+    verifier: { success: 0, failed: 0, avgMs: 0 },
     marketData: { success: 0, failed: 0, avgMs: 0 },
   }
 };
@@ -361,6 +404,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   if (pipelineHealth.apiStatus === 'down') {
     return {
       shouldRunValidator: false,
+      shouldRunVerifier: false,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: false,
       delayBeforeNextCallMs: 5000,
@@ -373,6 +417,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     const waitTime = pipelineHealth.rateLimitReset - now + 500;
     return {
       shouldRunValidator: true,
+      shouldRunVerifier: true,
       shouldRunKnowledgeSearch: false, // Skip to save quota
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: waitTime,
@@ -384,6 +429,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   if (pipelineHealth.apiStatus === 'degraded' || pipelineHealth.consecutiveFailures >= 2) {
     return {
       shouldRunValidator: pipelineHealth.consecutiveFailures < 3,
+      shouldRunVerifier: pipelineHealth.consecutiveFailures < 2,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: 3000,
@@ -400,6 +446,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
 
   return {
     shouldRunValidator: true,
+    shouldRunVerifier: true,
     shouldRunKnowledgeSearch: true,
     shouldFetchMarketData: true,
     delayBeforeNextCallMs: Math.max(5000, Math.min(optimalDelay, 8000)),
@@ -592,6 +639,50 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   }
 
   return annotations;
+}
+
+function parseVerifiedAnnotations(text: string, lens: string): ChartAnnotation[] {
+  const annotations: ChartAnnotation[] = [];
+
+  try {
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)```/);
+    if (!jsonMatch) return annotations;
+
+    const parsed = JSON.parse(jsonMatch[1]);
+    if (!Array.isArray(parsed)) return annotations;
+
+    for (const item of parsed) {
+      if (item.type && item.lens === lens && item.label && typeof item.yPercent === 'number') {
+        annotations.push({
+          type: item.type,
+          lens: item.lens,
+          label: item.label,
+          yPercent: Math.max(0, Math.min(100, item.yPercent)),
+          yEndPercent: item.yEndPercent != null ? Math.max(0, Math.min(100, item.yEndPercent)) : undefined,
+          xPercent: item.xPercent != null ? Math.max(0, Math.min(100, item.xPercent)) : undefined,
+          xEndPercent: item.xEndPercent != null ? Math.max(0, Math.min(100, item.xEndPercent)) : undefined,
+          direction: item.direction,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to parse verified annotation JSON', e);
+  }
+
+  return annotations;
+}
+
+function cleanAnalysisText(text: string): string {
+  return text
+    .replace(/```json[\s\S]*?```/g, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
+    .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
+    .replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '')
+    .replace(/^\s*\*?\*?Annotation:?\*?\*?\s*$/gm, '')
+    .replace(/^\s*#{1,6}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
@@ -1671,6 +1762,14 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
    - Verify annotation positions match actual chart locations.`
       };
 
+      const lensVerifierRoles: Record<string, string> = {
+        smc: `You are the dedicated SMC Corrections AI. You fully understand how the Smart Money Concepts lens works and must strictly enforce ICT/SMC definitions: valid order blocks, fair value gaps, BOS/CHoCH, mitigation state, premium/discount, and institutional buy/sell zones.`,
+        gs: `You are the dedicated Goldman Sachs Institutional Flow Corrections AI. You fully understands how the institutional narrative lens works and must strictly enforce liquidity void, absorption, stop-hunt, dark-pool/iceberg, and bank-flow logic.`,
+        psych: `You are the dedicated Douglas/Schwager Psychology Corrections AI. You fully understand the psychology lens and must strictly enforce Market Wizards, Trading in the Zone, and The Disciplined Trader principles: probability, risk-first thinking, stop clusters, pain trades, and no certainty claims.`,
+        ppa: `You are the dedicated Pure Price Action Corrections AI. You fully understand the price-action lens and must strictly enforce support/resistance, swing structure, candlestick pattern, role-flip, trendline, and trigger rules from raw chart structure only.`,
+        isyn: `You are the dedicated Institutional Synthesis Corrections AI. You fully understand the synthesis lens and must strictly enforce the four-layer workflow: Psychology → Institutional Narrative → SMC Structure → Price Action Trigger, with tiered confluence and risk-first trade planning.`
+      };
+
       // ===== PIPELINE ORCHESTRATOR: Pre-flight health check =====
       if (pipelineHealth.apiStatus === 'down') {
         console.log('[Orchestrator] API was marked down. Running health check before starting pipeline...');
@@ -1725,10 +1824,13 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
-        // ===== STAGE 2: AI Validator (Orchestrator-controlled) =====
+        // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
         // Wrapped in try/catch so primary analysis is always returned even if validation fails
         let finalAnnotations = primaryAnnotations;
         let analysisSource = analysisText;
+        let verificationMarketData: MarketDataContext | null = null;
+        let verificationKnowledgeContext = 'Knowledge search skipped by orchestrator to conserve API quota.';
+        let verificationWebEvidence: WebSearchResult[] = [];
 
         if (decision.shouldRunValidator) {
           try {
@@ -1779,19 +1881,9 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
             }
 
             const [marketData, knowledgeContext] = await Promise.all(parallelTasks) as [MarketDataContext | null, string];
-
-            const externalDataSection = marketData
-              ? `\n\n**EXTERNAL MARKET DATA (Live from ${marketData.source}):**
-Symbol: ${marketData.symbol}
-${marketData.keyLevels}
-${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData.recentCandles.length} candles):\n${marketData.recentCandles.slice(-5).map(c => `  ${c.time}: O=${c.open} H=${c.high} L=${c.low} C=${c.close}`).join('\n')}` : ''}
-
-**USE THIS DATA TO:**
-- Cross-reference price levels in the analysis against real market data.
-- Verify current price context and premium/discount assessment.
-- Check key round numbers, recent highs/lows, and pivot points.
-- Validate asset and timeframe correctness.`
-              : `\n\n**NOTE:** External market data could not be fetched for this asset. Rely on visual chart verification only.`;
+            verificationMarketData = marketData;
+            verificationKnowledgeContext = knowledgeContext;
+            const externalDataSection = buildMarketDataSection(marketData);
 
             // Orchestrator-managed delay before validator call
             const validatorDelay = Math.max(decision.delayBeforeNextCallMs, 1500);
@@ -1866,17 +1958,90 @@ IMPORTANT:
           console.log(`[Orchestrator] Skipped validator for "${lens}" — ${decision.reason}`);
         }
 
+        // ===== STAGE 3: Lens Specialist Verifier + Data Search Corrections =====
+        if (decision.shouldRunVerifier) {
+          try {
+            const symbol = verificationMarketData?.symbol || await extractSymbolFromAnalysis(analysisSource);
+            const searchQuery = buildLensResearchQuery(lens, symbol, prompt);
+            verificationWebEvidence = await fetchWebSearchResults(searchQuery);
+
+            const verifierDelay = Math.max(2000, Math.floor(decision.delayBeforeNextCallMs / 2));
+            console.log(`[Orchestrator] Waiting ${verifierDelay}ms before specialist verifier call for "${lens}"...`);
+            await new Promise(resolve => setTimeout(resolve, verifierDelay));
+
+            const verifierMessages: GroqMessage[] = [
+              {
+                role: 'system',
+                content: `${lensVerifierRoles[lens] || 'You are a strict lens specialist verification AI.'}
+
+${lensValidationRules[lens] || ''}
+
+**SPECIALIST VERIFICATION MANDATE:**
+You are the third AI for this lens. The first AI produced the lens analysis. The second validator checked chart/framework consistency. You now must fully understand this exact lens and strictly enforce its knowledge rules while using all relevant source evidence available below.
+
+You MUST:
+1. Re-check every annotation against the chart image and the lens rules above.
+2. Conduct evidence-based correction using live market data, source/news evidence, and the framework research context below.
+3. Preserve only annotations that the lens rules and evidence support.
+4. Correct wrong yPercent/xPercent placement, wrong price labels, invalid zones, unsupported certainty language, and framework violations.
+5. Add missing annotations only when the chart and evidence support them.
+6. Never invent unverifiable source claims. If external evidence is unavailable, state that chart-only verification was used.
+7. Return the final corrected analysis and final corrected JSON annotations.
+
+${buildMarketDataSection(verificationMarketData)}
+
+${buildWebEvidenceSection(verificationWebEvidence)}
+
+**FRAMEWORK RESEARCH CONTEXT:**
+${verificationKnowledgeContext}
+
+**OUTPUT FORMAT:**
+1. Start with "## Lens Specialist Verification" and summarize PASS/CORRECTED/REMOVED decisions in 5-8 bullets.
+2. Add "## Evidence Used" and list market/search sources actually used.
+3. Add the final corrected lens analysis.
+4. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
+
+IMPORTANT:
+- ALL annotations must use lens "${lens}".
+- Do not return default placeholder annotations.
+- If no annotation is evidence-supported, return an empty JSON array.`
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: 'data:image/png;base64,' + base64Image
+                    }
+                  },
+                  {
+                    type: 'text',
+                    text: `**CURRENT VALIDATED ANALYSIS:**\n\n${analysisSource}\n\n**CURRENT VALIDATED ANNOTATIONS:**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\nPerform final specialist verification for lens "${lens}" and output the corrected analysis plus corrected JSON annotations.`
+                  }
+                ]
+              }
+            ];
+
+            const verifierText = await callGroq(verifierMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 2, `verifier-${lens}`, 4096);
+            const verifierAnnotations = parseVerifiedAnnotations(verifierText, lens);
+
+            if (verifierAnnotations.length > 0 || verifierText.includes('```json')) {
+              finalAnnotations = verifierAnnotations;
+              analysisSource = verifierText;
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" finalized ${verifierAnnotations.length} annotations.`);
+            } else {
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" returned no JSON. Keeping previous validated result.`);
+            }
+          } catch (verificationError) {
+            console.warn(`[Orchestrator] Specialist verifier failed for lens "${lens}", using prior validated analysis:`, verificationError);
+          }
+        } else {
+          console.log(`[Orchestrator] Skipped specialist verifier for "${lens}" — ${decision.reason}`);
+        }
+
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
-        const cleanAnalysis = analysisSource
-          .replace(/```json[\s\S]*?```/g, '')
-          .replace(/```[\s\S]*?```/g, '')
-          .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
-          .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
-          .replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '')
-          .replace(/^\s*\*?\*?Annotation:?\*?\*?\s*$/gm, '')
-          .replace(/^\s*#{1,6}\s*$/gm, '')
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
+        const cleanAnalysis = cleanAnalysisText(analysisSource);
 
         allAnnotations.push(...finalAnnotations);
         allAnalysisParts.push(cleanAnalysis);
