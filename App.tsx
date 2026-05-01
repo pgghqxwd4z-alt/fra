@@ -102,6 +102,8 @@ const App: React.FC = () => {
 
   const handleRemoveImage = (id: string, index: number) => {
     if (confirm("Remove this image and its analysis?")) {
+      const imageToRemove = analyzedImages.find(img => img.id === id);
+      if (imageToRemove) URL.revokeObjectURL(imageToRemove.url);
       const updatedImages = analyzedImages.filter(img => img.id !== id);
       setAnalyzedImages(updatedImages);
       if (updatedImages.length === 0) {
@@ -111,6 +113,17 @@ const App: React.FC = () => {
       } else if (index === selectedImageIndex) {
         setSelectedImageIndex(Math.min(index, updatedImages.length - 1));
       }
+    }
+  };
+
+  const resetAuditContext = () => {
+    if (confirm("Permanently wipe session context?")) {
+      analyzedImages.forEach(img => URL.revokeObjectURL(img.url));
+      setMessages([]);
+      setAnalyzedImages([]);
+      setChatAnalysis(null);
+      setMasterAuditConclusion(null);
+      setActiveTab('overview');
     }
   };
 
@@ -488,7 +501,7 @@ const App: React.FC = () => {
             )}
             
             <div className="flex justify-center pt-20 pb-12">
-              <button onClick={() => { if(confirm("Permanently wipe session context?")) { setMessages([]); setAnalyzedImages([]); setChatAnalysis(null); setMasterAuditConclusion(null); setActiveTab('overview'); } }} className="group text-slate-400 hover:text-rose-500 font-bold text-[10px] uppercase tracking-widest flex items-center gap-2 transition-all">
+              <button onClick={resetAuditContext} className="group text-slate-400 hover:text-rose-500 font-bold text-[10px] uppercase tracking-widest flex items-center gap-2 transition-all">
                 <div className="p-2 rounded-lg group-hover:bg-rose-50 transition-colors"><Trash2 size={16} /></div> Reset Audit Context
               </button>
             </div>
