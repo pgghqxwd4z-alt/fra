@@ -475,13 +475,19 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', timeoutMs?: number): Promise<string> {
+  // Vision models need more time on Groq under load; text-only models can fail-fast and retry sooner.
+  // Heuristic: scout/vision models get 180s, llama-3.1-8b-instant gets 45s, everything else 120s.
+  const effectiveTimeout = timeoutMs ?? (
+    /scout|vision|llama-4/i.test(model) ? 180_000 :
+    /instant|8b/i.test(model) ? 45_000 :
+    120_000
+  );
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
-      // Add 90-second timeout to prevent hanging requests
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000);
+      const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
         headers: {
