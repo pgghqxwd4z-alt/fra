@@ -3,12 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GoogleGenAI, Type } from '@google/genai';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, 'dist');
 const port = Number(process.env.PORT || 8787);
 const serveStatic = process.env.SERVE_STATIC !== 'false';
+const groqUrl = 'https://api.groq.com/openai/v1/chat/completions';
+const fastModel = process.env.GROQ_FAST_MODEL || 'llama-3.1-8b-instant';
+const reasoningModel = process.env.GROQ_REASONING_MODEL || 'llama-3.3-70b-versatile';
+const visionModel = process.env.GROQ_VISION_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
 
 const STRICT_TRADING_KNOWLEDGE = `
   CRITICAL: DO NOT PROVIDE GENERIC AI SUGGESTIONS. ALL INSIGHTS MUST BE DERIVED EXCLUSIVELY FROM THESE 5 SOURCES:
@@ -28,19 +31,16 @@ const STRICT_TRADING_KNOWLEDGE = `
   5. Goldman Sachs Institutional Strategy:
      - Structural cycles, accumulation/distribution, and high-tier liquidity hunting.
 
-  MACRO CONTEXT: Use Google Search to cross-reference Forex Factory economic calendar data. High impact news (Red Folders) must dictate a shift in Douglas-based risk expectations.
+  MACRO CONTEXT: Consider high-impact economic calendar risk. High impact news (Red Folders) must dictate a shift in Douglas-based risk expectations.
 `;
 
-const FLASH_MODEL = 'gemini-1.5-flash';
-const PRO_MODEL = 'gemini-1.5-pro';
-
-const createAiClient = () => {
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+const getGroqApiKey = () => {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error('Missing API_KEY or GEMINI_API_KEY environment variable');
+    throw new Error('Missing GROQ_API_KEY environment variable');
   }
 
-  return new GoogleGenAI({ apiKey });
+  return apiKey;
 };
 
 const safeParseJson = (text, fallback) => {
@@ -52,6 +52,48 @@ const safeParseJson = (text, fallback) => {
     return fallback;
   }
 };
+
+const groqJson = async ({ model, system, user, fallback, maxTokens = 2048, temperature = 0.2 }) => {
+  const response = await fetch(groqUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getGroqApiKey()}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: `${system}\nReturn only valid JSON. Do not wrap the JSON in markdown.` },
+        { role: 'user', content: user }
+      ],
+      response_format: { type: 'json_object' },
+      temperature,
+      max_tokens: maxTokens
+    })
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `Groq request failed with ${response.status}`);
+  }
+
+  const data = safeParseJson(text, {});
+  const content = data.choices?.[0]?.message?.content;
+  return safeParseJson(content, fallback);
+};
+
+const analysisShape = (includeAnnotations = false) => `{
+  "summary": "string",
+  "keyTopics": ["string"],
+  "psychologyInsights": "string",
+  "strategyCritique": "string",
+  "marketWizardsPrinciples": ["string"],
+  "frameworks": [{"framework": "string", "status": "Aligned|Violation|Neutral", "insight": "string"}],
+  "newsImpacts": [{"event": "string", "impactOnTechnicals": "string", "alignmentWithDouglas": "string", "recommendation": "string"}],
+  "disciplineScore": 0,
+  "unresolvedQuestions": ["string"],
+  "suggestedActions": ["string"]${includeAnnotations ? ',\n  "annotations": [{"type": "BOS|CHoCH|OrderBlock|Liquidity|Support|Resistance|PsychologyZone", "label": "string", "box_2d": [0, 0, 0, 0], "insight": "string"}]' : ''}
+}`;
 
 const readRequestBody = async (request) => {
   const chunks = [];
@@ -69,90 +111,6 @@ const sendJson = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
-const newsSchema = {
-  type: Type.ARRAY,
-  items: {
-    type: Type.OBJECT,
-    properties: {
-      id: { type: Type.STRING },
-      title: { type: Type.STRING },
-      currency: { type: Type.STRING },
-      impact: { type: Type.STRING, enum: ['High', 'Medium', 'Low'] },
-      time: { type: Type.STRING },
-      actual: { type: Type.STRING },
-      forecast: { type: Type.STRING },
-      previous: { type: Type.STRING }
-    },
-    required: ['id', 'title', 'currency', 'impact', 'time']
-  }
-};
-
-const analysisSchema = (includeAnnotations = false) => ({
-  type: Type.OBJECT,
-  properties: {
-    summary: { type: Type.STRING },
-    keyTopics: { type: Type.ARRAY, items: { type: Type.STRING } },
-    psychologyInsights: { type: Type.STRING },
-    strategyCritique: { type: Type.STRING },
-    marketWizardsPrinciples: { type: Type.ARRAY, items: { type: Type.STRING } },
-    frameworks: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          framework: { type: Type.STRING },
-          status: { type: Type.STRING, enum: ['Aligned', 'Violation', 'Neutral'] },
-          insight: { type: Type.STRING }
-        },
-        required: ['framework', 'status', 'insight']
-      }
-    },
-    newsImpacts: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          event: { type: Type.STRING },
-          impactOnTechnicals: { type: Type.STRING },
-          alignmentWithDouglas: { type: Type.STRING },
-          recommendation: { type: Type.STRING }
-        },
-        required: ['event', 'impactOnTechnicals', 'alignmentWithDouglas', 'recommendation']
-      }
-    },
-    disciplineScore: { type: Type.NUMBER },
-    unresolvedQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
-    suggestedActions: { type: Type.ARRAY, items: { type: Type.STRING } },
-    ...(includeAnnotations ? {
-      annotations: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            type: { type: Type.STRING, enum: ['BOS', 'CHoCH', 'OrderBlock', 'Liquidity', 'Support', 'Resistance', 'PsychologyZone'] },
-            label: { type: Type.STRING },
-            box_2d: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-            insight: { type: Type.STRING }
-          },
-          required: ['type', 'label', 'box_2d', 'insight']
-        }
-      }
-    } : {})
-  },
-  required: [
-    'summary',
-    'keyTopics',
-    'psychologyInsights',
-    'strategyCritique',
-    'marketWizardsPrinciples',
-    'frameworks',
-    'disciplineScore',
-    'unresolvedQuestions',
-    'suggestedActions',
-    ...(includeAnnotations ? ['annotations'] : [])
-  ]
-});
-
 const emptyAnalysis = {
   summary: '',
   keyTopics: [],
@@ -166,113 +124,108 @@ const emptyAnalysis = {
 };
 
 const fetchNewsCalendar = async () => {
-  const ai = createAiClient();
-  const searchResponse = await ai.models.generateContent({
-    model: FLASH_MODEL,
-    contents: 'Fetch current high-impact economic news events for Forex markets today/this week from reliable sources like Forex Factory. Include time, currency, title, and impact.',
-    config: {
-      tools: [{ googleSearch: {} }]
-    }
+  const result = await groqJson({
+    model: fastModel,
+    system: 'You structure macroeconomic calendar data for forex traders.',
+    user: `Return JSON with a single "events" array of likely high-impact forex macro events for this week.
+Each event must have id, title, currency, impact ("High", "Medium", or "Low"), time, actual, forecast, previous, and sourceUrl.
+If current live calendar data is unavailable, return an empty events array.
+Schema: {"events":[{"id":"string","title":"string","currency":"string","impact":"High|Medium|Low","time":"string","actual":"string","forecast":"string","previous":"string","sourceUrl":"string"}]}`,
+    fallback: { events: [] },
+    maxTokens: 2048
   });
 
-  const newsText = searchResponse.text;
-  const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-  const urls = groundingChunks
-    .filter(chunk => chunk.web?.uri)
-    .map(chunk => chunk.web.uri);
-  const primarySourceUrl = urls[0] || '';
-
-  const structResponse = await ai.models.generateContent({
-    model: FLASH_MODEL,
-    contents: `Transform the following economic news raw text into a clean JSON array of news objects.
-    Information:
-    ${newsText}`,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: newsSchema
-    }
-  });
-
-  const parsedNews = safeParseJson(structResponse.text, []);
-  return parsedNews.map(item => ({
-    ...item,
-    sourceUrl: primarySourceUrl
-  }));
+  return Array.isArray(result.events) ? result.events : [];
 };
 
 const analyzeChatData = async ({ messages = [], news = [] }) => {
-  const ai = createAiClient();
   const snippet = messages.slice(-150).map(m => `[${m.timestamp}] ${m.sender}: ${m.text}`).join('\n');
   const newsContext = news.map(n => `${n.time} - ${n.currency} ${n.title} (Impact: ${n.impact})`).join('\n');
 
-  const response = await ai.models.generateContent({
-    model: PRO_MODEL,
-    contents: `CONDUCT DEEP AUDIT: Analyze this trader conversation considering the current MACRO NEWS environment.
+  return groqJson({
+    model: reasoningModel,
+    system: `You are an Institutional Audit Engine. ${STRICT_TRADING_KNOWLEDGE}. Use deep reasoning to identify if traders are ignoring high-impact news or violating Douglas's principles during volatility.`,
+    user: `CONDUCT DEEP AUDIT: Analyze this trader conversation considering the current MACRO NEWS environment.
 
     Macro Calendar Data:
     ${newsContext}
 
     Transcript:
-    ${snippet}`,
-    config: {
-      systemInstruction: `You are an Institutional Audit Engine. ${STRICT_TRADING_KNOWLEDGE}. Use deep reasoning to identify if traders are ignoring high-impact news or violating Douglas's principles during volatility.`,
-      responseMimeType: 'application/json',
-      responseSchema: analysisSchema(false)
-    }
-  });
+    ${snippet}
 
-  return safeParseJson(response.text, emptyAnalysis);
+Return this JSON shape:
+${analysisShape(false)}`,
+    fallback: emptyAnalysis,
+    maxTokens: 4096
+  });
 };
 
 const analyzeTradingImage = async ({ base64Data, mimeType, news = [] }) => {
-  const ai = createAiClient();
   const newsContext = news.map(n => `${n.time} - ${n.currency} ${n.title} (Impact: ${n.impact})`).join('\n');
-
-  const response = await ai.models.generateContent({
-    model: PRO_MODEL,
-    contents: {
-      parts: [
+  const dataUrl = `data:${mimeType};base64,${base64Data}`;
+  const response = await fetch(groqUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getGroqApiKey()}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: visionModel,
+      messages: [
         {
-          inlineData: {
-            data: base64Data,
-            mimeType
-          }
+          role: 'system',
+          content: `You are a Visual Institutional Auditor. ${STRICT_TRADING_KNOWLEDGE}. Return only valid JSON. Do not wrap the JSON in markdown.`
         },
         {
-          text: `DEEP VISUAL AUDIT: Identify structure strictly via SMC/PA/Goldman. Cross-reference this chart setup with the following economic events:
-          ${newsContext}`
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `DEEP VISUAL AUDIT: Identify structure strictly via SMC/PA/Goldman. Cross-reference this chart setup with the following economic events:
+              ${newsContext}
+
+Return this JSON shape:
+${analysisShape(true)}`
+            },
+            {
+              type: 'image_url',
+              image_url: { url: dataUrl }
+            }
+          ]
         }
-      ]
-    },
-    config: {
-      systemInstruction: `You are a Visual Institutional Auditor. ${STRICT_TRADING_KNOWLEDGE}. No generic advice. Identify if technical setups (SMC/PA) are at risk due to impending high-impact macro news.`,
-      responseMimeType: 'application/json',
-      responseSchema: analysisSchema(true)
-    }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 4096
+    })
   });
 
-  return safeParseJson(response.text, { ...emptyAnalysis, annotations: [] });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `Groq request failed with ${response.status}`);
+  }
+
+  const data = safeParseJson(text, {});
+  return safeParseJson(data.choices?.[0]?.message?.content, { ...emptyAnalysis, annotations: [] });
 };
 
 const synthesizeGlobalAudit = async ({ results = [] }) => {
-  const ai = createAiClient();
   const summaries = results.map((r, i) => `Audit ${i + 1} Summary: ${r.summary}\nPsychology: ${r.psychologyInsights}\nTechnical: ${r.strategyCritique}`).join('\n---\n');
 
-  const response = await ai.models.generateContent({
-    model: PRO_MODEL,
-    contents: `DEEP REASONING SYNTHESIS: Cross-analyze all uploaded charts, logs, and macro news impacts.
+  return groqJson({
+    model: reasoningModel,
+    system: `You are the Master Performance Auditor. ${STRICT_TRADING_KNOWLEDGE}. Synthesize all technical, psychological, and macro context data into a single master report.`,
+    user: `DEEP REASONING SYNTHESIS: Cross-analyze all uploaded charts, logs, and macro news impacts.
     Produce a final consolidated institutional conclusion.
 
     Audits to Synthesize:
-    ${summaries}`,
-    config: {
-      systemInstruction: `You are the Master Performance Auditor. ${STRICT_TRADING_KNOWLEDGE}. Synthesize all technical, psychological, and macro context data into a single master report.`,
-      responseMimeType: 'application/json',
-      responseSchema: analysisSchema(false)
-    }
-  });
+    ${summaries}
 
-  return safeParseJson(response.text, emptyAnalysis);
+Return this JSON shape:
+${analysisShape(false)}`,
+    fallback: emptyAnalysis,
+    maxTokens: 4096
+  });
 };
 
 const apiRoutes = {
