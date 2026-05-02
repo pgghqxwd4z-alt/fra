@@ -1,6 +1,0 @@
-{
-  "name": "trader 101",
-  "description": "An advanced chat log analyzer that provides deep insights, sentiment analysis, and visual trends from your conversation history using Google's Gemini AI.",
-  "requestFramePermissions": [],
-  "majorCapabilities": []
-}

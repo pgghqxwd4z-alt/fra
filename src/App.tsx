@@ -16,7 +16,7 @@ import { ChartAnnotator } from './components/ChartAnnotator';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isAnalyzingChat, setIsAnalyzingChat] = useState(false);
+  const [, setIsAnalyzingChat] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [isFetchingNews, setIsFetchingNews] = useState(false);
   const [news, setNews] = useState<NewsEvent[]>([]);
@@ -208,8 +208,6 @@ const App: React.FC = () => {
       annotations: allResults.flatMap(r => r.annotations || [])
     } as AnalysisResult;
   }, [chatAnalysis, analyzedImages, masterAuditConclusion]);
-
-  const COLORS = ['#6366f1', '#a855f7', '#ec4899', '#f97316', '#10b981', '#06b6d4'];
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-inter">

@@ -13,7 +13,6 @@ interface ChartAnnotatorProps {
 type Tool = 'cursor' | 'line' | 'rect' | 'circle' | 'text' | 'price-level';
 
 export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annotations }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   
