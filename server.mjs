@@ -77,7 +77,7 @@ const groqJson = async ({ model, system, user, fallback, maxTokens = 2048, tempe
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(getClientErrorMessage(text, `Groq vision request failed with ${response.status}`));
+    throw new Error(getClientErrorMessage(text, `Groq request failed with ${response.status}`));
   }
 
   const data = safeParseJson(text, {});
@@ -492,7 +492,7 @@ ${analysisShape(true)}`
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || `Groq request failed with ${response.status}`);
+    throw new Error(getClientErrorMessage(text, `Groq vision request failed with ${response.status}`));
   }
 
   const data = safeParseJson(text, {});
