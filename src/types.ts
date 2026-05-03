@@ -74,6 +74,7 @@ export interface AnalyzedImage {
   url: string;
   analysis: AnalysisResult | null;
   isLoading: boolean;
+  error?: string;
 }
 
 export type FeaturePermission = 'demoData' | 'newsTerminal' | 'transcriptAudit' | 'chartUpload' | 'masterAudit';

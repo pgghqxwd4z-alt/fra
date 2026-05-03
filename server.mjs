@@ -12,7 +12,7 @@ const authDbPath = path.join(dataDir, 'auth.json');
 const port = Number(process.env.PORT || 8787);
 const serveStatic = process.env.SERVE_STATIC !== 'false';
 const groqUrl = 'https://api.groq.com/openai/v1/chat/completions';
-const fastModel = process.env.GROQ_FAST_MODEL || 'llama-3.1-8b-instant';
+const forexFactoryCalendarUrl = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
 const reasoningModel = process.env.GROQ_REASONING_MODEL || 'llama-3.3-70b-versatile';
 const visionModel = process.env.GROQ_VISION_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
 
@@ -77,7 +77,7 @@ const groqJson = async ({ model, system, user, fallback, maxTokens = 2048, tempe
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || `Groq request failed with ${response.status}`);
+    throw new Error(getClientErrorMessage(text, `Groq vision request failed with ${response.status}`));
   }
 
   const data = safeParseJson(text, {});
@@ -97,6 +97,33 @@ const analysisShape = (includeAnnotations = false) => `{
   "unresolvedQuestions": ["string"],
   "suggestedActions": ["string"]${includeAnnotations ? ',\n  "annotations": [{"type": "BOS|CHoCH|OrderBlock|Liquidity|Support|Resistance|PsychologyZone", "label": "string", "box_2d": [0, 0, 0, 0], "insight": "string"}]' : ''}
 }`;
+
+const getClientErrorMessage = (text, fallback) => {
+  const parsed = safeParseJson(text, null);
+  return parsed?.error?.message || parsed?.error || fallback;
+};
+
+const normalizeImpact = (impact) => {
+  const value = String(impact || '').toLowerCase();
+  if (value.includes('high')) return 'High';
+  if (value.includes('medium')) return 'Medium';
+  return 'Low';
+};
+
+const normalizeNewsEvent = (event, index) => ({
+  id: `${String(event.country || 'FX')}-${String(event.date || index)}-${String(event.title || 'event')}`
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80),
+  title: String(event.title || 'Economic event'),
+  currency: String(event.country || 'FX'),
+  impact: normalizeImpact(event.impact),
+  time: String(event.date || event.time || 'TBA'),
+  actual: event.actual ? String(event.actual) : '',
+  forecast: event.forecast ? String(event.forecast) : '',
+  previous: event.previous ? String(event.previous) : '',
+  sourceUrl: event.url ? String(event.url) : 'https://www.forexfactory.com/calendar'
+});
 
 const readRequestBody = async (request) => {
   const chunks = [];
@@ -381,18 +408,24 @@ const emptyAnalysis = {
 };
 
 const fetchNewsCalendar = async () => {
-  const result = await groqJson({
-    model: fastModel,
-    system: 'You structure macroeconomic calendar data for forex traders.',
-    user: `Return JSON with a single "events" array of likely high-impact forex macro events for this week.
-Each event must have id, title, currency, impact ("High", "Medium", or "Low"), time, actual, forecast, previous, and sourceUrl.
-If current live calendar data is unavailable, return an empty events array.
-Schema: {"events":[{"id":"string","title":"string","currency":"string","impact":"High|Medium|Low","time":"string","actual":"string","forecast":"string","previous":"string","sourceUrl":"string"}]}`,
-    fallback: { events: [] },
-    maxTokens: 2048
+  const response = await fetch(forexFactoryCalendarUrl, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'TradeQuantPro/1.0'
+    }
   });
 
-  return Array.isArray(result.events) ? result.events : [];
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Forex Factory calendar unavailable (${response.status})`);
+  }
+
+  const events = safeParseJson(text, []);
+  if (!Array.isArray(events)) return [];
+
+  return events
+    .filter(event => ['High', 'Medium', 'Low'].includes(normalizeImpact(event.impact)))
+    .map(normalizeNewsEvent);
 };
 
 const analyzeChatData = async ({ messages = [], news = [] }) => {

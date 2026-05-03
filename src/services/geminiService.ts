@@ -1,5 +1,14 @@
 import { ChatMessage, AnalysisResult, NewsEvent } from "../types";
 
+const getErrorMessage = (message: string): string => {
+  try {
+    const parsed = JSON.parse(message) as { error?: string };
+    return parsed.error || message;
+  } catch {
+    return message;
+  }
+};
+
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
   const response = await fetch(path, {
     method: 'POST',
@@ -11,7 +20,7 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed with ${response.status}`);
+    throw new Error(getErrorMessage(message) || `Request failed with ${response.status}`);
   }
 
   return response.json() as Promise<T>;

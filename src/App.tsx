@@ -42,6 +42,7 @@ const App: React.FC = () => {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [isFetchingNews, setIsFetchingNews] = useState(false);
   const [news, setNews] = useState<NewsEvent[]>([]);
+  const [aiError, setAiError] = useState('');
   const [chatAnalysis, setChatAnalysis] = useState<AnalysisResult | null>(null);
   const [masterAuditConclusion, setMasterAuditConclusion] = useState<AnalysisResult | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'analysis' | 'messages' | 'charts' | 'news'>('overview');
@@ -62,11 +63,13 @@ const App: React.FC = () => {
   const handleFetchNews = useCallback(async () => {
     if (!hasPermission('newsTerminal')) return;
     setIsFetchingNews(true);
+    setAiError('');
     try {
       const data = await fetchNewsCalendar();
       setNews(data);
     } catch (error) {
       console.error("Failed to fetch news", error);
+      setAiError(error instanceof Error ? error.message : 'Failed to fetch macro news');
     } finally {
       setIsFetchingNews(false);
     }
@@ -99,7 +102,8 @@ const App: React.FC = () => {
         id: `img-${Date.now()}-${idx}`,
         url: URL.createObjectURL(file),
         analysis: null,
-        isLoading: true
+        isLoading: true,
+        error: undefined
       }));
 
       setAnalyzedImages(prev => [...prev, ...newImages]);
@@ -110,15 +114,18 @@ const App: React.FC = () => {
         const reader = new FileReader();
         reader.onload = async (e) => {
           const base64 = (e.target?.result as string).split(',')[1];
+          setAiError('');
           try {
             const result = await analyzeTradingImage(base64, file.type, news);
             setAnalyzedImages(prev => prev.map(img => 
-              img.id === newImages[idx].id ? { ...img, analysis: result, isLoading: false } : img
+              img.id === newImages[idx].id ? { ...img, analysis: result, isLoading: false, error: undefined } : img
             ));
           } catch (error) {
             console.error(error);
+            const message = error instanceof Error ? error.message : 'Chart AI detection failed';
+            setAiError(message);
             setAnalyzedImages(prev => prev.map(img => 
-              img.id === newImages[idx].id ? { ...img, isLoading: false } : img
+              img.id === newImages[idx].id ? { ...img, isLoading: false, error: message } : img
             ));
           }
         };
@@ -164,6 +171,7 @@ const App: React.FC = () => {
       setAnalyzedImages([]);
       setChatAnalysis(null);
       setMasterAuditConclusion(null);
+      setAiError('');
       setActiveTab('overview');
     }
   };
@@ -171,12 +179,14 @@ const App: React.FC = () => {
   const startChatAnalysis = async () => {
     if (messages.length === 0 || !hasPermission('transcriptAudit')) return;
     setIsAnalyzingChat(true);
+    setAiError('');
     try {
       const result = await analyzeChatData(messages, news);
       setChatAnalysis(result);
       setActiveTab('analysis');
     } catch (error) {
       console.error(error);
+      setAiError(error instanceof Error ? error.message : 'Transcript AI audit failed');
     } finally {
       setIsAnalyzingChat(false);
     }
@@ -193,12 +203,14 @@ const App: React.FC = () => {
     if (results.length === 0) return;
 
     setIsSynthesizing(true);
+    setAiError('');
     try {
       const finalAudit = await synthesizeGlobalAudit(results);
       setMasterAuditConclusion(finalAudit);
       setActiveTab('analysis');
     } catch (error) {
       console.error("Master synthesis failed", error);
+      setAiError(error instanceof Error ? error.message : 'Master AI audit failed');
     } finally {
       setIsSynthesizing(false);
     }
@@ -398,6 +410,15 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex-1 p-6 lg:p-10 max-w-[1600px] mx-auto w-full">
+        {aiError && (
+          <div className="mb-6 rounded-2xl border border-rose-100 bg-rose-50 px-5 py-4 text-sm font-bold text-rose-700 shadow-sm flex items-start justify-between gap-4">
+            <span>{aiError}</span>
+            <button onClick={() => setAiError('')} className="text-rose-400 hover:text-rose-700">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         {isAdminOpen && sessionUser.role === 'admin' && (
           <section className="mb-8 bg-white rounded-[2rem] border border-emerald-100 shadow-sm p-6">
             <div className="flex items-center justify-between mb-6">
@@ -570,6 +591,7 @@ const App: React.FC = () => {
                       >
                         <img src={img.url} className="w-full h-full object-cover" />
                         {img.isLoading && <div className="absolute inset-0 bg-slate-900/60 flex items-center justify-center"><div className="w-5 h-5 border-2 border-white border-t-transparent animate-spin rounded-full" /></div>}
+                        {img.error && <div className="absolute inset-0 bg-rose-950/70 flex items-center justify-center text-white"><X size={22} /></div>}
                       </button>
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleRemoveImage(img.id, idx); }}
@@ -587,6 +609,11 @@ const App: React.FC = () => {
                       <div className="h-[70vh]">
                         <ChartAnnotator imageUrl={currentImage.url} annotations={currentImage.analysis?.annotations || []} />
                       </div>
+                      {!currentImage.isLoading && currentImage.error && (
+                        <div className="max-w-5xl mx-auto w-full rounded-3xl border border-rose-100 bg-rose-50 p-6 text-sm font-bold text-rose-700">
+                          Chart AI detection failed: {currentImage.error}
+                        </div>
+                      )}
                       {!currentImage.isLoading && currentImage.analysis && (
                         <div className="max-w-5xl mx-auto w-full">
                           <AnalysisView analysis={currentImage.analysis} />
