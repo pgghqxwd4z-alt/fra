@@ -75,3 +75,38 @@ export interface AnalyzedImage {
   analysis: AnalysisResult | null;
   isLoading: boolean;
 }
+
+export type FeaturePermission = 'demoData' | 'newsTerminal' | 'transcriptAudit' | 'chartUpload' | 'masterAudit';
+
+export type UserStatus = 'pending' | 'approved' | 'denied' | 'suspended';
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'user';
+  status: UserStatus;
+  permissions: Record<FeaturePermission, boolean>;
+  createdAt: string;
+  approvedAt?: string;
+  lastLoginAt?: string;
+  suspensionReason?: string;
+}
+
+export interface ActivityEvent {
+  id: string;
+  userId?: string;
+  userEmail?: string;
+  type: string;
+  details: string;
+  createdAt: string;
+}
+
+export interface AuthSession {
+  user: AdminUser;
+}
+
+export interface AdminState {
+  users: AdminUser[];
+  activities: ActivityEvent[];
+}

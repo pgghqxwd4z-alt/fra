@@ -1,20 +1,42 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { 
   MessageSquare, TrendingUp, Upload,
   Trash2, LayoutDashboard, BrainCircuit, LineChart as ChartIcon, Shield, ImageIcon, Activity,
-  ZoomIn, ZoomOut, RotateCcw, X, Fingerprint, Globe, Bell, ExternalLink
+  ZoomIn, ZoomOut, RotateCcw, X, Fingerprint, Globe, Bell, ExternalLink,
+  Lock, LogOut, UserCheck, Users, Ban, Clock, Settings
 } from 'lucide-react';
-import { ChatMessage, ParticipantStats, AnalysisResult, AnalyzedImage, NewsEvent } from './types';
+import { ChatMessage, ParticipantStats, AnalysisResult, AnalyzedImage, NewsEvent, AdminState, FeaturePermission } from './types';
 import { parseRawText, generateSampleData } from './utils/parser';
 import { analyzeChatData, analyzeTradingImage, synthesizeGlobalAudit, fetchNewsCalendar } from './services/geminiService';
+import { fetchSession, registerUser, loginUser, logoutUser, fetchAdminState, setUserStatus, setUserPermission } from './services/authService';
 import { StatsCard } from './components/StatsCard';
 import { AnalysisView } from './components/AnalysisView';
 import { ChartAnnotator } from './components/ChartAnnotator';
 
+const featureLabels: Record<FeaturePermission, string> = {
+  demoData: 'Demo data',
+  newsTerminal: 'News terminal',
+  transcriptAudit: 'Transcript audit',
+  chartUpload: 'Chart upload',
+  masterAudit: 'Master audit'
+};
+
+const featureList = Object.keys(featureLabels) as FeaturePermission[];
+
 const App: React.FC = () => {
+  const [sessionUser, setSessionUser] = useState<Awaited<ReturnType<typeof fetchSession>>['user'] | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [adminState, setAdminState] = useState<AdminState | null>(null);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [, setIsAnalyzingChat] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -29,10 +51,16 @@ const App: React.FC = () => {
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
   useEffect(() => {
-    handleFetchNews();
+    fetchSession()
+      .then(({ user }) => setSessionUser(user))
+      .catch(() => setSessionUser(null))
+      .finally(() => setIsAuthLoading(false));
   }, []);
 
-  const handleFetchNews = async () => {
+  const hasPermission = useCallback((permission: FeaturePermission) => Boolean(sessionUser?.permissions?.[permission]), [sessionUser]);
+
+  const handleFetchNews = useCallback(async () => {
+    if (!hasPermission('newsTerminal')) return;
     setIsFetchingNews(true);
     try {
       const data = await fetchNewsCalendar();
@@ -42,9 +70,22 @@ const App: React.FC = () => {
     } finally {
       setIsFetchingNews(false);
     }
-  };
+  }, [hasPermission]);
+
+  useEffect(() => {
+    if (sessionUser && hasPermission('newsTerminal')) {
+      handleFetchNews();
+    }
+  }, [sessionUser, hasPermission, handleFetchNews]);
+
+  useEffect(() => {
+    if (sessionUser?.role === 'admin' && isAdminOpen) {
+      fetchAdminState().then(setAdminState).catch(error => setAuthError(error.message));
+    }
+  }, [sessionUser, isAdminOpen]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!hasPermission('chartUpload')) return;
     const files = event.target.files;
     if (!files) return;
 
@@ -128,7 +169,7 @@ const App: React.FC = () => {
   };
 
   const startChatAnalysis = async () => {
-    if (messages.length === 0) return;
+    if (messages.length === 0 || !hasPermission('transcriptAudit')) return;
     setIsAnalyzingChat(true);
     try {
       const result = await analyzeChatData(messages, news);
@@ -142,6 +183,7 @@ const App: React.FC = () => {
   };
 
   const startMasterSynthesis = async () => {
+    if (!hasPermission('masterAudit')) return;
     const results: AnalysisResult[] = [];
     if (chatAnalysis) results.push(chatAnalysis);
     analyzedImages.forEach(img => {
@@ -180,6 +222,46 @@ const App: React.FC = () => {
 
   const currentImage = analyzedImages[selectedImageIndex];
 
+  const handleAuthSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      if (authMode === 'register') {
+        const result = await registerUser(authName, authEmail, authPassword);
+        setAuthMessage(result.message);
+        setAuthMode('login');
+      } else {
+        const result = await loginUser(authEmail, authPassword);
+        setSessionUser(result.user);
+        setAuthPassword('');
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Authentication failed');
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    setSessionUser(null);
+    setAdminState(null);
+    setIsAdminOpen(false);
+  };
+
+  const refreshAdminState = async () => {
+    if (sessionUser?.role !== 'admin') return;
+    setAdminState(await fetchAdminState());
+  };
+
+  const updateStatus = async (userId: string, status: 'pending' | 'approved' | 'denied' | 'suspended') => {
+    const reason = status === 'suspended' ? prompt('Reason for suspension?') || 'Suspended by admin' : '';
+    setAdminState(await setUserStatus(userId, status, reason));
+  };
+
+  const updatePermission = async (userId: string, permission: FeaturePermission, enabled: boolean) => {
+    setAdminState(await setUserPermission(userId, permission, enabled));
+  };
+
   const displayAnalysis = useMemo(() => {
     if (masterAuditConclusion) return masterAuditConclusion;
 
@@ -209,6 +291,50 @@ const App: React.FC = () => {
     } as AnalysisResult;
   }, [chatAnalysis, analyzedImages, masterAuditConclusion]);
 
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-2 border-white border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!sessionUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-white text-slate-900 rounded-[2rem] p-8 shadow-2xl">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white">
+              <Lock size={24} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-black">TradeQuant Access</h1>
+              <p className="text-xs font-black uppercase tracking-widest text-indigo-600">Approval required</p>
+            </div>
+          </div>
+          <form onSubmit={handleAuthSubmit} className="space-y-4">
+            {authMode === 'register' && (
+              <input value={authName} onChange={event => setAuthName(event.target.value)} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold" placeholder="Full name" />
+            )}
+            <input value={authEmail} onChange={event => setAuthEmail(event.target.value)} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold" placeholder="Email" type="email" />
+            <input value={authPassword} onChange={event => setAuthPassword(event.target.value)} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold" placeholder="Password" type="password" />
+            {authError && <div className="rounded-2xl bg-rose-50 text-rose-700 text-xs font-bold p-4">{authError}</div>}
+            {authMessage && <div className="rounded-2xl bg-emerald-50 text-emerald-700 text-xs font-bold p-4">{authMessage}</div>}
+            <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl py-3 font-black">
+              {authMode === 'register' ? 'Request Registration Approval' : 'Sign In'}
+            </button>
+          </form>
+          <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError(''); }} className="w-full mt-5 text-xs font-black uppercase tracking-widest text-slate-500">
+            {authMode === 'login' ? 'Need access? Register' : 'Already approved? Sign in'}
+          </button>
+          <p className="mt-6 text-[11px] text-slate-400 leading-relaxed">
+            The first registered account becomes the administrator. Later accounts stay pending until approved.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-inter">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-[60] px-6 py-4 flex items-center justify-between shadow-sm">
@@ -223,6 +349,18 @@ const App: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <div className="hidden md:flex flex-col items-end">
+            <span className="text-sm font-black text-slate-800">{sessionUser.name}</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{sessionUser.role}</span>
+          </div>
+          {sessionUser.role === 'admin' && (
+            <button onClick={() => { setIsAdminOpen(prev => !prev); if (!isAdminOpen) refreshAdminState(); }} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all">
+              <Settings size={16} /> Admin
+            </button>
+          )}
+          <button onClick={handleLogout} className="p-2.5 bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-xl transition-all">
+            <LogOut size={18} />
+          </button>
           <div className="flex items-center bg-slate-100 rounded-xl p-1 border border-slate-200">
             <button onClick={() => adjustZoom(-0.1)} className="p-1.5 hover:bg-white hover:shadow-sm rounded-lg text-slate-500 transition-all"><ZoomOut size={16} /></button>
             <span className="px-2 text-[10px] font-bold text-slate-400 w-12 text-center">{Math.round(textZoom * 100)}%</span>
@@ -234,7 +372,7 @@ const App: React.FC = () => {
             {displayAnalysis && (
               <button 
                 onClick={startMasterSynthesis}
-                disabled={isSynthesizing}
+                disabled={isSynthesizing || !hasPermission('masterAudit')}
                 className="hidden lg:flex items-center gap-2 bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md shadow-slate-200 disabled:opacity-50 border border-slate-700"
               >
                 {isSynthesizing ? (
@@ -250,16 +388,70 @@ const App: React.FC = () => {
                 )}
               </button>
             )}
-            <label className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm cursor-pointer transition-all shadow-md shadow-indigo-100">
+            <label className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md ${hasPermission('chartUpload') ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer shadow-indigo-100' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
               <Upload size={18} />
               <span className="hidden sm:inline">Bulk Import</span>
-              <input type="file" className="hidden" multiple accept=".txt,.json,image/*" onChange={handleFileUpload} />
+              <input type="file" className="hidden" multiple accept=".txt,.json,image/*" onChange={handleFileUpload} disabled={!hasPermission('chartUpload')} />
             </label>
           </div>
         </div>
       </header>
 
       <main className="flex-1 p-6 lg:p-10 max-w-[1600px] mx-auto w-full">
+        {isAdminOpen && sessionUser.role === 'admin' && (
+          <section className="mb-8 bg-white rounded-[2rem] border border-emerald-100 shadow-sm p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2"><Users size={24} className="text-emerald-600" /> Admin Control Center</h2>
+                <p className="text-sm text-slate-500 font-medium">Approve registrations, suspend users, set feature permissions, and monitor activity.</p>
+              </div>
+              <button onClick={refreshAdminState} className="text-xs font-black uppercase tracking-widest text-emerald-600">Refresh</button>
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+              <div className="xl:col-span-2 space-y-4">
+                {adminState?.users.map(user => (
+                  <div key={user.id} className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+                      <div>
+                        <h3 className="font-black text-slate-900">{user.name}</h3>
+                        <p className="text-xs text-slate-500 font-bold">{user.email}</p>
+                        <div className="flex gap-2 mt-2">
+                          <span className="text-[10px] font-black uppercase bg-white border border-slate-200 px-2 py-1 rounded-lg">{user.role}</span>
+                          <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-lg ${user.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : user.status === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>{user.status}</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => updateStatus(user.id, 'approved')} className="px-3 py-2 bg-emerald-600 text-white rounded-xl text-xs font-black flex items-center gap-1"><UserCheck size={14} /> Approve</button>
+                        <button onClick={() => updateStatus(user.id, 'suspended')} className="px-3 py-2 bg-rose-600 text-white rounded-xl text-xs font-black flex items-center gap-1"><Ban size={14} /> Suspend</button>
+                        <button onClick={() => updateStatus(user.id, 'denied')} className="px-3 py-2 bg-slate-800 text-white rounded-xl text-xs font-black">Deny</button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+                      {featureList.map(permission => (
+                        <label key={permission} className="flex items-center gap-2 bg-white rounded-xl border border-slate-200 p-3 text-[11px] font-black text-slate-600">
+                          <input type="checkbox" checked={user.permissions[permission]} onChange={event => updatePermission(user.id, permission, event.target.checked)} />
+                          {featureLabels[permission]}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-slate-950 text-white rounded-3xl p-5 max-h-[42rem] overflow-y-auto custom-scrollbar">
+                <h3 className="font-black uppercase tracking-widest text-xs mb-4 flex items-center gap-2"><Clock size={16} /> User Monitoring</h3>
+                <div className="space-y-3">
+                  {adminState?.activities.map(activity => (
+                    <div key={activity.id} className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                      <div className="text-[10px] text-indigo-300 font-black uppercase">{activity.type}</div>
+                      <div className="text-xs font-bold mt-1">{activity.details}</div>
+                      <div className="text-[10px] text-slate-400 mt-2">{activity.userEmail || 'System'} · {new Date(activity.createdAt).toLocaleString()}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
         {messages.length === 0 && analyzedImages.length === 0 ? (
           <div className="h-[70vh] flex flex-col items-center justify-center text-center">
             <div className="w-24 h-24 bg-slate-100 text-indigo-600 rounded-[2.5rem] flex items-center justify-center mb-8 shadow-inner">
@@ -271,10 +463,10 @@ const App: React.FC = () => {
               Our reasoning engine cross-references the <strong>Forex Factory Calendar</strong> to ensure your SMC/Price Action setups survive high-impact volatility.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
-              <button onClick={() => { setMessages(generateSampleData()); setActiveTab('overview'); }} className="bg-white hover:bg-slate-50 text-slate-700 px-10 py-4 rounded-2xl font-bold border border-slate-200 shadow-sm transition-all">Try Demo Data</button>
-              <label className="bg-indigo-600 hover:bg-indigo-700 text-white px-10 py-4 rounded-2xl font-bold transition-all shadow-xl shadow-indigo-200 cursor-pointer flex items-center justify-center gap-2">
+              <button disabled={!hasPermission('demoData')} onClick={() => { setMessages(generateSampleData()); setActiveTab('overview'); }} className="bg-white hover:bg-slate-50 text-slate-700 px-10 py-4 rounded-2xl font-bold border border-slate-200 shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed">Try Demo Data</button>
+              <label className={`px-10 py-4 rounded-2xl font-bold transition-all shadow-xl flex items-center justify-center gap-2 ${hasPermission('chartUpload') ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200 cursor-pointer' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
                 <ImageIcon size={20} /> Bulk Import Files
-                <input type="file" className="hidden" multiple accept=".txt,.json,image/*" onChange={handleFileUpload} />
+                <input type="file" className="hidden" multiple accept=".txt,.json,image/*" onChange={handleFileUpload} disabled={!hasPermission('chartUpload')} />
               </label>
             </div>
           </div>
@@ -284,7 +476,7 @@ const App: React.FC = () => {
               <button onClick={() => setActiveTab('overview')} className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'overview' ? 'bg-white text-indigo-600 shadow-lg shadow-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>
                 <LayoutDashboard size={18} /> Dashboard
               </button>
-              <button onClick={() => setActiveTab('news')} className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'news' ? 'bg-white text-indigo-600 shadow-lg shadow-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>
+              <button disabled={!hasPermission('newsTerminal')} onClick={() => setActiveTab('news')} className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed ${activeTab === 'news' ? 'bg-white text-indigo-600 shadow-lg shadow-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>
                 <Globe size={18} /> News Terminal
               </button>
               {analyzedImages.length > 0 && (
@@ -312,7 +504,7 @@ const App: React.FC = () => {
                       <Globe className="text-indigo-600" size={24} />
                       Forex Factory Calendar
                     </h3>
-                    <button onClick={handleFetchNews} disabled={isFetchingNews} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all">
+                    <button onClick={handleFetchNews} disabled={isFetchingNews || !hasPermission('newsTerminal')} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all disabled:opacity-40">
                       <RotateCcw size={20} className={isFetchingNews ? 'animate-spin' : ''} />
                     </button>
                   </div>
@@ -429,7 +621,7 @@ const App: React.FC = () => {
                       <p className="text-xs text-slate-500">{messages.length} messages parsed</p>
                     </div>
                   </div>
-                  <button onClick={startChatAnalysis} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all">
+                  <button onClick={startChatAnalysis} disabled={!hasPermission('transcriptAudit')} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
                     <BrainCircuit size={14} /> Audit Messages
                   </button>
                 </div>
