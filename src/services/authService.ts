@@ -11,7 +11,15 @@ const postJson = async <T>(path: string, body: unknown): Promise<T> => {
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Request failed with ${response.status}`);
+    const errorMessage = (() => {
+      try {
+        const parsed = JSON.parse(message) as { error?: string };
+        return parsed.error || message;
+      } catch {
+        return message;
+      }
+    })();
+    throw new Error(errorMessage || `Request failed with ${response.status}`);
   }
 
   return response.json() as Promise<T>;
