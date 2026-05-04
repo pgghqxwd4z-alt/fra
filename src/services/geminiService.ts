@@ -685,6 +685,108 @@ function cleanAnalysisText(text: string): string {
     .trim();
 }
 
+function isLikelyGroqCapacityError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('429')
+    || normalized.includes('rate')
+    || normalized.includes('max retries exceeded')
+    || normalized.includes('timeout')
+    || normalized.includes('abort')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror');
+}
+
+function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
+  const directive = prompt.trim() || 'Identify institutional footprints and probabilistic entry zones.';
+
+  if (lens === 'gs') {
+    return `**GS Analysis — Framework Fallback**
+
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of a temporary failure. Retry for full AI chart-specific verification._
+
+## Institutional Flow Checklist
+- Map the dominant impulse leg first, then identify the liquidity voids left by fast displacement.
+- Treat unfilled high-volume displacement zones as candidate bank-flow rebalancing areas, not guaranteed entries.
+- Mark buy-side liquidity above obvious swing highs and sell-side liquidity below obvious swing lows.
+- Confirm any Goldman Sachs buy/sell zone only when price reacts from a liquidity pool with displacement and follow-through.
+- Invalidate the flow read if price accepts back through the origin of the displacement zone.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback reason: ${errorMessage}
+- No external source claim is asserted here because the live model call did not complete.
+
+## Execution Guidance
+- Wait for price to return to a mapped liquidity void or institutional zone.
+- Require a lower-timeframe shift before entry.
+- Keep risk outside the liquidity pool that would invalidate the institutional-flow thesis.`;
+  }
+
+  if (lens === 'smc') {
+    return `**SMC Analysis — Framework Fallback**
+
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic SMC framework instead of a temporary failure. Retry for full AI chart-specific verification._
+
+## SMC Checklist
+- Validate bullish order blocks as the last down candle before bullish displacement.
+- Validate bearish order blocks as the last up candle before bearish displacement.
+- Keep only fair value gaps with a true three-candle imbalance.
+- Mark BOS/CHoCH only at actual swing breaks.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback reason: ${errorMessage}
+- No external source claim is asserted here because the live model call did not complete.`;
+  }
+
+  if (lens === 'psych') {
+    return `**PSYCH Analysis — Framework Fallback**
+
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic trading-psychology framework instead of a temporary failure. Retry for full AI chart-specific verification._
+
+## Psychology Checklist
+- Identify where retail traders are likely trapped after a late breakout or breakdown.
+- Mark stop clusters only around obvious swing highs/lows or crowded invalidation points.
+- Avoid certainty language; every idea must remain probabilistic and risk-first.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback reason: ${errorMessage}
+- No external source claim is asserted here because the live model call did not complete.`;
+  }
+
+  if (lens === 'ppa') {
+    return `**PPA Analysis — Framework Fallback**
+
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic price-action framework instead of a temporary failure. Retry for full AI chart-specific verification._
+
+## Price Action Checklist
+- Mark support/resistance only at repeated reactions or clear role flips.
+- Confirm candlestick triggers at meaningful levels, not in the middle of noise.
+- Treat trendline breaks as actionable only after acceptance or retest.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback reason: ${errorMessage}
+- No external source claim is asserted here because the live model call did not complete.`;
+  }
+
+  return `**ISYN Analysis — Framework Fallback**
+
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic institutional-synthesis framework instead of a temporary failure. Retry for full AI chart-specific verification._
+
+## Four-Layer Checklist
+- Psychology: define risk and probabilistic expectation before trade direction.
+- Institutional Narrative: identify likely liquidity targets and displacement zones.
+- SMC Structure: validate order blocks, FVGs, BOS/CHoCH, and premium/discount.
+- Price Action Trigger: require an executable lower-timeframe confirmation.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback reason: ${errorMessage}
+- No external source claim is asserted here because the live model call did not complete.`;
+}
+
 function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
   const annotations: ChartAnnotation[] = [];
 
@@ -1821,7 +1923,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
           }
         ];
 
-        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`);
+        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`, 4096);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
@@ -1939,7 +2041,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`);
+            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`, 4096);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -2049,8 +2151,8 @@ IMPORTANT:
         } catch (lensError) {
           // Individual lens failed — try text-only fallback API before giving up
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
-          const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
-          console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting text-only fallback API...`);
+          const isRateLimit = isLikelyGroqCapacityError(errorMsg);
+          console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting fallback recovery...`);
 
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
           if (!isRateLimit) {
@@ -2092,7 +2194,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 3, `fallback-${lens}`);
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 2, `fallback-${lens}`, 2048);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -2124,19 +2226,10 @@ Also provide a JSON annotation block with general-purpose educational annotation
             }
           }
 
-          // Ultimate fallback: placeholder annotations
-          console.error(`[Orchestrator] Lens "${lens}" — all APIs failed. Using placeholder annotations.`);
-          const placeholderAnnotations = generateDefaultAnnotations([lens]);
-          allAnnotations.push(...placeholderAnnotations);
-          const isNetworkError = errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('abort') || errorMsg.includes('timeout');
-          allAnalysisParts.push(
-            `**${lens.toUpperCase()} Analysis — Temporary Failure**\n\n` +
-            (isRateLimit
-              ? `The AI analysis engine is currently rate-limited. The Groq API free tier allows 30 requests per minute. Please wait 30-60 seconds and try again.\n\nDefault annotations have been placed as placeholders.`
-              : isNetworkError
-              ? `The AI analysis engine experienced a network timeout. This is usually temporary — the API may be under heavy load. Please wait a moment and retry.\n\nDefault annotations have been placed as placeholders.`
-              : `The AI analysis engine encountered an error: ${errorMsg}\n\nDefault annotations have been placed as placeholders. Please retry the analysis.`)
-          );
+          // Ultimate fallback: deterministic framework analysis instead of a Temporary Failure panel
+          console.warn(`[Orchestrator] Lens "${lens}" — API unavailable. Using framework fallback analysis.`);
+          allAnnotations.push(...generateDefaultAnnotations([lens]));
+          allAnalysisParts.push(buildFrameworkFallbackAnalysis(lens, prompt, errorMsg));
         }
       }
 
