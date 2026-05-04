@@ -95,7 +95,7 @@ const analysisShape = (includeAnnotations = false) => `{
   "newsImpacts": [{"event": "string", "impactOnTechnicals": "string", "alignmentWithDouglas": "string", "recommendation": "string"}],
   "disciplineScore": 0,
   "unresolvedQuestions": ["string"],
-  "suggestedActions": ["string"]${includeAnnotations ? ',\n  "annotations": [{"type": "BOS|CHoCH|OrderBlock|Liquidity|Support|Resistance|PsychologyZone", "label": "string", "box_2d": [0, 0, 0, 0], "insight": "string"}]' : ''}
+  "suggestedActions": ["string"]${includeAnnotations ? ',\n  "annotations": [{"type": "BOS|CHoCH|OrderBlock|Liquidity|Support|Resistance|PsychologyZone", "label": "string", "box_2d": [0, 0, 0, 0], "insight": "string", "source": "string"}]' : ''}
 }`;
 
 const getClientErrorMessage = (text, fallback) => {
@@ -473,6 +473,8 @@ const analyzeTradingImage = async ({ base64Data, mimeType, news = [] }) => {
               type: 'text',
               text: `DEEP VISUAL AUDIT: Identify structure strictly via SMC/PA/Goldman. Cross-reference this chart setup with the following economic events:
               ${newsContext}
+
+Every substantive visual chart finding you mention anywhere in the JSON must also appear in annotations. This includes structure, liquidity, support/resistance, order blocks, psychology zones, framework findings, macro-risk zones, and suggested chart actions. Use normalized box_2d coordinates [ymin, xmin, ymax, xmax] from 0 to 1000. If a finding applies to the whole chart or cannot be localized, use a broad full-chart or zone-level box instead of omitting it.
 
 Return this JSON shape:
 ${analysisShape(true)}`

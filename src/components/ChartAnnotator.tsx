@@ -358,7 +358,20 @@ export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annota
                     style={getAnnotationStyle(ann.box_2d, ann.type, hoveredIndex === idx)}
                     onMouseEnter={() => setHoveredIndex(idx)}
                     onMouseLeave={() => setHoveredIndex(null)}
-                  />
+                  >
+                    <div
+                      className="absolute -top-3 -left-3 min-w-6 h-6 rounded-full border-2 border-white text-white text-[10px] font-black flex items-center justify-center px-1 shadow-lg"
+                      style={{ backgroundColor: colors[ann.type] || '#6366f1' }}
+                    >
+                      {idx + 1}
+                    </div>
+                    <div
+                      className="absolute left-1 top-1 max-w-[85%] rounded-lg px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white shadow-lg truncate"
+                      style={{ backgroundColor: colors[ann.type] || '#6366f1' }}
+                    >
+                      {ann.label}
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -448,9 +461,13 @@ export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annota
               <div className="bg-indigo-500 p-2 rounded-xl text-white shadow-lg"><Crosshair size={20} /></div>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
+                  <span className="rounded-full bg-indigo-500 px-2 py-0.5 text-[10px] font-black text-white">{hoveredIndex + 1}</span>
                   <span className="text-indigo-400 text-[10px] font-black uppercase tracking-widest">{annotations[hoveredIndex].type}</span>
                   <h4 className="text-white font-bold">{annotations[hoveredIndex].label}</h4>
                 </div>
+                {annotations[hoveredIndex].source && (
+                  <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-indigo-300">{annotations[hoveredIndex].source}</p>
+                )}
                 <p className="text-indigo-100/80 text-sm leading-relaxed max-w-2xl">{annotations[hoveredIndex].insight}</p>
               </div>
             </div>
@@ -483,10 +500,12 @@ export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annota
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-1">
+                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[9px] font-black text-white">{idx + 1}</span>
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: colors[ann.type] }} />
                     <span className="text-[9px] font-black uppercase text-slate-400">{ann.type}</span>
                   </div>
                   <h5 className="font-bold text-slate-800 text-xs">{ann.label}</h5>
+                  {ann.source && <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{ann.source}</p>}
                 </button>
               ))
             )}

@@ -24,6 +24,95 @@ const featureLabels: Record<FeaturePermission, string> = {
   masterAudit: 'Master audit'
 };
 
+const annotationTypes = ['BOS', 'CHoCH', 'OrderBlock', 'Liquidity', 'Support', 'Resistance', 'PsychologyZone'] as const;
+type ChartAnnotation = NonNullable<AnalysisResult['annotations']>[number];
+
+const fallbackAnnotationType = (text: string): ChartAnnotation['type'] => {
+  const value = text.toLowerCase();
+  if (value.includes('choch') || value.includes('character')) return 'CHoCH';
+  if (value.includes('bos') || value.includes('break of structure')) return 'BOS';
+  if (value.includes('order block') || value.includes('supply') || value.includes('demand')) return 'OrderBlock';
+  if (value.includes('liquidity') || value.includes('sweep') || value.includes('inducement')) return 'Liquidity';
+  if (value.includes('resistance') || value.includes('short')) return 'Resistance';
+  if (value.includes('support') || value.includes('long')) return 'Support';
+  return 'PsychologyZone';
+};
+
+const isValidBox = (box: unknown): box is [number, number, number, number] => (
+  Array.isArray(box)
+  && box.length === 4
+  && box.every(value => typeof value === 'number' && Number.isFinite(value))
+  && box[2] > box[0]
+  && box[3] > box[1]
+);
+
+const normalizeBox = (box: [number, number, number, number]): [number, number, number, number] => {
+  const [ymin, xmin, ymax, xmax] = box.map(value => Math.max(0, Math.min(1000, Math.round(value))));
+  return [
+    Math.min(ymin, ymax - 1),
+    Math.min(xmin, xmax - 1),
+    Math.max(ymax, ymin + 1),
+    Math.max(xmax, xmin + 1)
+  ];
+};
+
+const textToZoneBox = (text: string, index: number): [number, number, number, number] => {
+  const value = text.toLowerCase();
+  const row = index % 4;
+  const bands: [number, number][] = [[60, 260], [280, 480], [500, 700], [720, 920]];
+  if (value.includes('resistance') || value.includes('supply') || value.includes('short')) return [60, 90, 300, 910];
+  if (value.includes('support') || value.includes('demand') || value.includes('long')) return [700, 90, 940, 910];
+  if (value.includes('macro') || value.includes('news') || value.includes('risk')) return [120, 120, 880, 880];
+  return [bands[row][0], 120, bands[row][1], 880];
+};
+
+const buildCompleteChartAnnotations = (analysis: AnalysisResult): ChartAnnotation[] => {
+  const existing = (analysis.annotations || []).map((annotation, index) => {
+    const text = `${annotation.type} ${annotation.label} ${annotation.insight}`;
+    const type = annotationTypes.includes(annotation.type) ? annotation.type : fallbackAnnotationType(text);
+    return {
+      ...annotation,
+      type,
+      label: annotation.label || `${type} finding ${index + 1}`,
+      insight: annotation.insight || annotation.label || 'AI chart finding',
+      box_2d: normalizeBox(isValidBox(annotation.box_2d) ? annotation.box_2d : textToZoneBox(text, index)),
+      source: annotation.source || 'Visual detection'
+    };
+  });
+
+  const derived = [
+    ...analysis.frameworks.map(item => ({
+      type: fallbackAnnotationType(`${item.framework} ${item.insight}`),
+      label: item.framework,
+      insight: `${item.status}: ${item.insight}`,
+      source: 'Grounding Matrix'
+    })),
+    ...(analysis.newsImpacts || []).map(item => ({
+      type: fallbackAnnotationType(`${item.event} ${item.impactOnTechnicals} ${item.recommendation}`),
+      label: item.event,
+      insight: `${item.impactOnTechnicals} ${item.recommendation}`,
+      source: 'Macro Impact'
+    })),
+    ...analysis.suggestedActions.map((item, index) => ({
+      type: fallbackAnnotationType(item),
+      label: `Action ${index + 1}`,
+      insight: item,
+      source: 'Suggested Action'
+    }))
+  ].map((item, index) => ({
+    ...item,
+    box_2d: textToZoneBox(`${item.label} ${item.insight}`, existing.length + index)
+  }));
+
+  const seen = new Set<string>();
+  return [...existing, ...derived].filter(annotation => {
+    const key = `${annotation.source}|${annotation.label}|${annotation.insight}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const featureList = Object.keys(featureLabels) as FeaturePermission[];
 
 const App: React.FC = () => {
@@ -117,8 +206,12 @@ const App: React.FC = () => {
           setAiError('');
           try {
             const result = await analyzeTradingImage(base64, file.type, news);
+            const completeResult = {
+              ...result,
+              annotations: buildCompleteChartAnnotations(result)
+            };
             setAnalyzedImages(prev => prev.map(img => 
-              img.id === newImages[idx].id ? { ...img, analysis: result, isLoading: false, error: undefined } : img
+              img.id === newImages[idx].id ? { ...img, analysis: completeResult, isLoading: false, error: undefined } : img
             ));
           } catch (error) {
             console.error(error);
