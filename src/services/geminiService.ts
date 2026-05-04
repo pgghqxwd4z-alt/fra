@@ -696,8 +696,15 @@ function isLikelyGroqCapacityError(message: string): boolean {
     || normalized.includes('networkerror');
 }
 
+function getFrameworkFallbackReason(errorMessage: string): string {
+  return isLikelyGroqCapacityError(errorMessage)
+    ? 'Live AI verification is temporarily unavailable after repeated capacity checks.'
+    : 'Live AI verification is temporarily unavailable for this request.';
+}
+
 function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
   const directive = prompt.trim() || 'Identify institutional footprints and probabilistic entry zones.';
+  const fallbackReason = getFrameworkFallbackReason(errorMessage);
 
   if (lens === 'gs') {
     return `**GS Analysis — Framework Fallback**
@@ -713,7 +720,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
 
 ## Evidence Discipline
 - User directive: ${directive}
-- Fallback reason: ${errorMessage}
+- Fallback status: ${fallbackReason}
 - No external source claim is asserted here because the live model call did not complete.
 
 ## Execution Guidance
@@ -735,7 +742,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
 
 ## Evidence Discipline
 - User directive: ${directive}
-- Fallback reason: ${errorMessage}
+- Fallback status: ${fallbackReason}
 - No external source claim is asserted here because the live model call did not complete.`;
   }
 
@@ -751,7 +758,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
 
 ## Evidence Discipline
 - User directive: ${directive}
-- Fallback reason: ${errorMessage}
+- Fallback status: ${fallbackReason}
 - No external source claim is asserted here because the live model call did not complete.`;
   }
 
@@ -767,7 +774,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
 
 ## Evidence Discipline
 - User directive: ${directive}
-- Fallback reason: ${errorMessage}
+- Fallback status: ${fallbackReason}
 - No external source claim is asserted here because the live model call did not complete.`;
   }
 
@@ -783,7 +790,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
 
 ## Evidence Discipline
 - User directive: ${directive}
-- Fallback reason: ${errorMessage}
+- Fallback status: ${fallbackReason}
 - No external source claim is asserted here because the live model call did not complete.`;
 }
 
