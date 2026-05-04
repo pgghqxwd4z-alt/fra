@@ -544,6 +544,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 // Enhanced callGroq with orchestrator monitoring
 async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = 8192): Promise<string> {
   const headers = getGroqHeaders();
+  let rateLimitExhausted = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
@@ -573,6 +574,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
+        rateLimitExhausted = true;
         // Rate limited — wait and retry with exponential backoff
         const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
         const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
@@ -603,7 +605,10 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
   }
-  throw new Error(`Groq API: max retries exceeded for stage "${stage}"`);
+  if (rateLimitExhausted) {
+    throw new Error(`Groq API: rate limit retries exhausted for stage "${stage}"`);
+  }
+  throw new Error(`Groq API: retries exhausted for stage "${stage}"`);
 }
 
 function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
@@ -685,19 +690,27 @@ function cleanAnalysisText(text: string): string {
     .trim();
 }
 
-function isLikelyGroqCapacityError(message: string): boolean {
+function isTemporaryGroqAvailabilityError(message: string): boolean {
   const normalized = message.toLowerCase();
-  return normalized.includes('429')
-    || normalized.includes('rate')
-    || normalized.includes('max retries exceeded')
+  return isGroqRateLimitOrCapacityError(message)
     || normalized.includes('timeout')
     || normalized.includes('abort')
     || normalized.includes('failed to fetch')
     || normalized.includes('networkerror');
 }
 
+function isGroqRateLimitOrCapacityError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('429')
+    || normalized.includes('rate limit')
+    || normalized.includes('rate-limit')
+    || normalized.includes('too many requests')
+    || normalized.includes('quota')
+    || normalized.includes('capacity');
+}
+
 function getFrameworkFallbackReason(errorMessage: string): string {
-  return isLikelyGroqCapacityError(errorMessage)
+  return isTemporaryGroqAvailabilityError(errorMessage)
     ? 'Live AI verification is temporarily unavailable after repeated capacity checks.'
     : 'Live AI verification is temporarily unavailable for this request.';
 }
@@ -2158,7 +2171,7 @@ IMPORTANT:
         } catch (lensError) {
           // Individual lens failed — try text-only fallback API before giving up
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
-          const isRateLimit = isLikelyGroqCapacityError(errorMsg);
+          const isRateLimit = isGroqRateLimitOrCapacityError(errorMsg);
           console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting fallback recovery...`);
 
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
@@ -2229,7 +2242,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
               continue; // Skip the placeholder fallback below
             } catch (fallbackError) {
               console.error(`[Orchestrator] Fallback API for "${lens}" also FAILED:`, fallbackError);
-              // Fall through to placeholder annotations
+              // Fall through to deterministic framework fallback
             }
           }
 
