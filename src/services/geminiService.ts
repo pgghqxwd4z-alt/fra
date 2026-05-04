@@ -1,4 +1,5 @@
 import { ChatMessage, AnalysisResult, NewsEvent } from "../types";
+import { getApiHeaders, getApiUrl } from "./api";
 
 const getErrorMessage = (message: string): string => {
   try {
@@ -10,9 +11,11 @@ const getErrorMessage = (message: string): string => {
 };
 
 const postJson = async <T>(path: string, body: unknown): Promise<T> => {
-  const response = await fetch(path, {
+  const response = await fetch(getApiUrl(path), {
     method: 'POST',
+    credentials: 'same-origin',
     headers: {
+      ...getApiHeaders(),
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(body)
