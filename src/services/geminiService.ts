@@ -678,6 +678,39 @@ function parseVerifiedAnnotations(text: string, lens: string): { annotations: Ch
   return { annotations, parsedJson: false };
 }
 
+function annotationsMatch(a: ChartAnnotation, b: ChartAnnotation): boolean {
+  return a.type === b.type
+    && a.lens === b.lens
+    && a.label === b.label
+    && a.yPercent === b.yPercent
+    && a.yEndPercent === b.yEndPercent
+    && a.xPercent === b.xPercent
+    && a.xEndPercent === b.xEndPercent
+    && a.direction === b.direction;
+}
+
+function areDefaultAnnotationsForLens(lens: string, annotations: ChartAnnotation[]): boolean {
+  const lensAnnotations = annotations.filter(annotation => annotation.lens === lens);
+  const defaults = generateDefaultAnnotations([lens]);
+  return lensAnnotations.length === defaults.length
+    && defaults.every(defaultAnnotation => lensAnnotations.some(annotation => annotationsMatch(annotation, defaultAnnotation)));
+}
+
+function getMinimumAnnotationCoverage(lens: string): number {
+  return lens === 'isyn' ? 4 : 3;
+}
+
+function hasVerifiedAnnotationCoverage(lens: string, annotations: ChartAnnotation[]): boolean {
+  const lensAnnotations = annotations.filter(annotation => annotation.lens === lens);
+  return lensAnnotations.length >= getMinimumAnnotationCoverage(lens)
+    && !areDefaultAnnotationsForLens(lens, lensAnnotations);
+}
+
+function summarizeAnnotationCoverage(lens: string, annotations: ChartAnnotation[]): string {
+  const lensAnnotations = annotations.filter(annotation => annotation.lens === lens);
+  return `${lensAnnotations.length}/${getMinimumAnnotationCoverage(lens)} non-default annotations for lens "${lens}"`;
+}
+
 function cleanAnalysisText(text: string): string {
   return text
     .replace(/```json[\s\S]*?```/g, '')
@@ -1893,6 +1926,14 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         isyn: `You are the dedicated Institutional Synthesis Corrections AI. You fully understand the synthesis lens and must strictly enforce the four-layer workflow: Psychology → Institutional Narrative → SMC Structure → Price Action Trigger, with tiered confluence and risk-first trade planning.`
       };
 
+      const lensAnnotationGuardRoles: Record<string, string> = {
+        smc: `You are the final SMC Annotation Guard AI. Your only job is to prevent the Smart Money Concepts lens from finishing with missing or placeholder annotations when the chart contains verifiable SMC data.`,
+        gs: `You are the final Goldman Sachs Institutional Flow Annotation Guard AI. Your only job is to prevent the Goldman Sachs lens from finishing with missing or placeholder annotations when the chart contains verifiable institutional-flow data.`,
+        psych: `You are the final Douglas/Schwager Psychology Annotation Guard AI. Your only job is to prevent the psychology lens from finishing with missing or placeholder annotations when the chart contains verifiable stop clusters, fear/greed zones, or retail pain points.`,
+        ppa: `You are the final Pure Price Action Annotation Guard AI. Your only job is to prevent the price-action lens from finishing with missing or placeholder annotations when the chart contains verifiable support, resistance, trend, or candlestick trigger data.`,
+        isyn: `You are the final Institutional Synthesis Annotation Guard AI. Your only job is to prevent the synthesis lens from finishing with missing or placeholder annotations when the chart contains verifiable confluence, institutional entry, exit, trigger, or risk zones.`
+      };
+
       // ===== PIPELINE ORCHESTRATOR: Pre-flight health check =====
       if (pipelineHealth.apiStatus === 'down') {
         console.log('[Orchestrator] API was marked down. Running health check before starting pipeline...');
@@ -1950,6 +1991,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
         // Wrapped in try/catch so primary analysis is always returned even if validation fails
         let finalAnnotations = primaryAnnotations;
+        let lastVerifiedAnnotations = hasVerifiedAnnotationCoverage(lens, primaryAnnotations) ? primaryAnnotations : [];
         let analysisSource = analysisText;
         let verificationMarketData: MarketDataContext | null = null;
         let verificationKnowledgeContext = 'Knowledge search skipped by orchestrator to conserve API quota.';
@@ -2068,6 +2110,9 @@ IMPORTANT:
             // Use validated annotations if the validator produced them, otherwise fall back to primary
             if (validatedAnnotations.length > 0) {
               finalAnnotations = validatedAnnotations;
+              if (hasVerifiedAnnotationCoverage(lens, validatedAnnotations)) {
+                lastVerifiedAnnotations = validatedAnnotations;
+              }
               analysisSource = validatedText;
               console.log(`[Orchestrator] Validator for "${lens}" produced ${validatedAnnotations.length} corrected annotations.`);
             } else {
@@ -2152,6 +2197,9 @@ IMPORTANT:
 
             if (verifierAnnotations.length > 0) {
               finalAnnotations = verifierAnnotations;
+              if (hasVerifiedAnnotationCoverage(lens, verifierAnnotations)) {
+                lastVerifiedAnnotations = verifierAnnotations;
+              }
               analysisSource = verifierText;
               console.log(`[Orchestrator] Specialist verifier for "${lens}" finalized ${verifierAnnotations.length} annotations.`);
             } else if (verifierResult.parsedJson) {
@@ -2164,6 +2212,101 @@ IMPORTANT:
           }
         } else {
           console.log(`[Orchestrator] Skipped specialist verifier for "${lens}" — ${decision.reason}`);
+        }
+
+        // ===== STAGE 4: Annotation Guard AI =====
+        // Final lens-specific check that prevents verified data from disappearing after validation/verifier stages.
+        if (!hasVerifiedAnnotationCoverage(lens, finalAnnotations)) {
+          const coverageSummary = summarizeAnnotationCoverage(lens, finalAnnotations);
+          console.warn(`[Orchestrator] Annotation guard triggered for "${lens}" — ${coverageSummary}.`);
+
+          if (pipelineHealth.apiStatus !== 'down') {
+            try {
+              const guardDelay = Math.max(1500, Math.floor(decision.delayBeforeNextCallMs / 3));
+              console.log(`[Orchestrator] Waiting ${guardDelay}ms before annotation guard call for "${lens}"...`);
+              await new Promise(resolve => setTimeout(resolve, guardDelay));
+
+              const guardMessages: GroqMessage[] = [
+                {
+                  role: 'system',
+                  content: `${lensAnnotationGuardRoles[lens] || 'You are the final lens annotation guard AI.'}
+
+${lensValidationRules[lens] || ''}
+
+**ANNOTATION GUARD MANDATE:**
+You are the final AI safety gate for this lens. The current pipeline result has weak, empty, or default-like annotations. Prevent the lens from finishing without verified chart annotations when the chart contains evidence.
+
+You MUST:
+1. Inspect the chart image directly and enforce the lens rules above.
+2. Use the validated analysis, market data, source evidence, and last known valid annotations below.
+3. Build a corrected JSON annotation set that covers the meaningful verified lens data in the chart.
+4. Preserve last known valid annotations only when still supported by the chart.
+5. Remove unsupported or placeholder annotations.
+6. If the chart truly has no evidence-supported annotations, return an empty JSON array and explain why.
+
+${buildMarketDataSection(verificationMarketData)}
+
+${buildWebEvidenceSection(verificationWebEvidence)}
+
+**FRAMEWORK RESEARCH CONTEXT:**
+${verificationKnowledgeContext}
+
+**OUTPUT FORMAT:**
+1. Start with "## Annotation Guard Verification".
+2. Explain whether annotations were REBUILT, PRESERVED, or EMPTY in 3-6 bullets.
+3. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
+
+IMPORTANT:
+- ALL annotations must use lens "${lens}".
+- Do not return default placeholder annotations.
+- Return at least ${getMinimumAnnotationCoverage(lens)} annotations when the chart supports verified lens data.`
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: 'data:image/png;base64,' + base64Image
+                      }
+                    },
+                    {
+                      type: 'text',
+                      text: `**VALIDATED ANALYSIS SOURCE:**\n\n${analysisSource}\n\n**CURRENT WEAK ANNOTATIONS (${coverageSummary}):**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\n**LAST KNOWN VALID ANNOTATIONS:**\n\n${JSON.stringify(lastVerifiedAnnotations, null, 2)}\n\nRebuild or preserve verified annotations for lens "${lens}" so the final UI does not lose chart-supported lens data.`
+                    }
+                  ]
+                }
+              ];
+
+              const guardText = await callGroq(guardMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 2, `annotation-guard-${lens}`, 4096);
+              const guardResult = parseVerifiedAnnotations(guardText, lens);
+
+              if (hasVerifiedAnnotationCoverage(lens, guardResult.annotations)) {
+                finalAnnotations = guardResult.annotations;
+                lastVerifiedAnnotations = guardResult.annotations;
+                analysisSource = `${guardText}\n\n${analysisSource}`;
+                console.log(`[Orchestrator] Annotation guard for "${lens}" rebuilt ${guardResult.annotations.length} verified annotations.`);
+              } else if (lastVerifiedAnnotations.length > 0) {
+                finalAnnotations = lastVerifiedAnnotations;
+                analysisSource = `## Annotation Guard Verification\n- PRESERVED last verified ${lens.toUpperCase()} annotations because the guard did not return stronger coverage.\n- Current weak coverage was ${coverageSummary}.\n\n${analysisSource}`;
+                console.log(`[Orchestrator] Annotation guard for "${lens}" preserved ${lastVerifiedAnnotations.length} prior verified annotations.`);
+              } else if (guardResult.parsedJson) {
+                console.log(`[Orchestrator] Annotation guard for "${lens}" returned no supported annotations and no prior verified annotations were available.`);
+              } else {
+                console.log(`[Orchestrator] Annotation guard for "${lens}" returned no parseable JSON and no prior verified annotations were available.`);
+              }
+            } catch (guardError) {
+              console.warn(`[Orchestrator] Annotation guard failed for lens "${lens}":`, guardError);
+              if (lastVerifiedAnnotations.length > 0) {
+                finalAnnotations = lastVerifiedAnnotations;
+                analysisSource = `## Annotation Guard Verification\n- PRESERVED last verified ${lens.toUpperCase()} annotations because the guard call failed.\n- Current weak coverage was ${coverageSummary}.\n\n${analysisSource}`;
+              }
+            }
+          } else if (lastVerifiedAnnotations.length > 0) {
+            finalAnnotations = lastVerifiedAnnotations;
+            analysisSource = `## Annotation Guard Verification\n- PRESERVED last verified ${lens.toUpperCase()} annotations because the API was unavailable for guard repair.\n- Current weak coverage was ${coverageSummary}.\n\n${analysisSource}`;
+            console.log(`[Orchestrator] Annotation guard for "${lens}" preserved prior annotations while API was down.`);
+          }
         }
 
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
