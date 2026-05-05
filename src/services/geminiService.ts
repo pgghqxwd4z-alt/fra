@@ -646,15 +646,15 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   return annotations;
 }
 
-function parseVerifiedAnnotations(text: string, lens: string): ChartAnnotation[] {
+function parseVerifiedAnnotations(text: string, lens: string): { annotations: ChartAnnotation[]; parsedJson: boolean } {
   const annotations: ChartAnnotation[] = [];
 
   try {
     const jsonMatch = text.match(/```json\s*([\s\S]*?)```/);
-    if (!jsonMatch) return annotations;
+    if (!jsonMatch) return { annotations, parsedJson: false };
 
     const parsed = JSON.parse(jsonMatch[1]);
-    if (!Array.isArray(parsed)) return annotations;
+    if (!Array.isArray(parsed)) return { annotations, parsedJson: false };
 
     for (const item of parsed) {
       if (item.type && item.lens === lens && item.label && typeof item.yPercent === 'number') {
@@ -670,11 +670,12 @@ function parseVerifiedAnnotations(text: string, lens: string): ChartAnnotation[]
         });
       }
     }
+    return { annotations, parsedJson: true };
   } catch (e) {
     console.warn('Failed to parse verified annotation JSON', e);
   }
 
-  return annotations;
+  return { annotations, parsedJson: false };
 }
 
 function cleanAnalysisText(text: string): string {
@@ -2146,14 +2147,17 @@ IMPORTANT:
             ];
 
             const verifierText = await callGroq(verifierMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 2, `verifier-${lens}`, 4096);
-            const verifierAnnotations = parseVerifiedAnnotations(verifierText, lens);
+            const verifierResult = parseVerifiedAnnotations(verifierText, lens);
+            const verifierAnnotations = verifierResult.annotations;
 
-            if (verifierAnnotations.length > 0 || verifierText.includes('```json')) {
+            if (verifierAnnotations.length > 0) {
               finalAnnotations = verifierAnnotations;
               analysisSource = verifierText;
               console.log(`[Orchestrator] Specialist verifier for "${lens}" finalized ${verifierAnnotations.length} annotations.`);
+            } else if (verifierResult.parsedJson) {
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" returned no supported annotations. Keeping previous validated result.`);
             } else {
-              console.log(`[Orchestrator] Specialist verifier for "${lens}" returned no JSON. Keeping previous validated result.`);
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" returned no parseable JSON. Keeping previous validated result.`);
             }
           } catch (verificationError) {
             console.warn(`[Orchestrator] Specialist verifier failed for lens "${lens}", using prior validated analysis:`, verificationError);
