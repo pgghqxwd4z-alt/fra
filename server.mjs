@@ -91,11 +91,13 @@ const analysisShape = (includeAnnotations = false) => `{
   "psychologyInsights": "string",
   "strategyCritique": "string",
   "marketWizardsPrinciples": ["string"],
-  "frameworks": [{"framework": "string", "status": "Aligned|Violation|Neutral", "insight": "string"}],
-  "newsImpacts": [{"event": "string", "impactOnTechnicals": "string", "alignmentWithDouglas": "string", "recommendation": "string"}],
+  "frameworks": [{"framework": "string", "status": "Aligned|Violation|Neutral", "insight": "string", "source": "string", "evidence": "string"}],
+  "newsImpacts": [{"event": "string", "impactOnTechnicals": "string", "alignmentWithDouglas": "string", "recommendation": "string", "sourceUrl": "string"}],
   "disciplineScore": 0,
   "unresolvedQuestions": ["string"],
-  "suggestedActions": ["string"]${includeAnnotations ? ',\n  "annotations": [{"type": "BOS|CHoCH|OrderBlock|Liquidity|Support|Resistance|PsychologyZone", "label": "string", "box_2d": [0, 0, 0, 0], "insight": "string", "source": "string"}]' : ''}
+  "suggestedActions": ["string"],
+  "dataSources": [{"name": "string", "url": "string", "usedFor": "string"}],
+  "verificationSummary": "string"${includeAnnotations ? ',\n  "annotations": [{"type": "BOS|CHoCH|OrderBlock|Liquidity|Support|Resistance|PsychologyZone", "label": "string", "box_2d": [0, 0, 0, 0], "insight": "string", "source": "string", "evidence": "string", "evidenceSource": "string", "verificationStatus": "Verified|Corrected|Unverified", "correction": "string"}]' : ''}
 }`;
 
 const getClientErrorMessage = (text, fallback) => {
@@ -124,6 +126,69 @@ const normalizeNewsEvent = (event, index) => ({
   previous: event.previous ? String(event.previous) : '',
   sourceUrl: event.url ? String(event.url) : 'https://www.forexfactory.com/calendar'
 });
+
+const knowledgeLensSources = [
+  {
+    name: 'Market Wizards - Jack D. Schwager',
+    usedFor: 'Risk discipline, independent thinking, and wizard-level execution standards'
+  },
+  {
+    name: 'Mark Douglas - Trading in the Zone / The Disciplined Trader',
+    usedFor: 'Probabilistic thinking, neutrality, and emotional-risk correction'
+  },
+  {
+    name: 'Smart Money Concepts',
+    usedFor: 'Order blocks, liquidity, inducement, BOS, CHoCH, and FVG structure'
+  },
+  {
+    name: 'Pure Price Action',
+    usedFor: 'Horizontal levels, rejection logic, trendline liquidity, and invalidation'
+  },
+  {
+    name: 'Goldman Sachs Institutional Strategy Lens',
+    usedFor: 'Structural cycles, accumulation/distribution, and high-tier liquidity hunting'
+  }
+];
+
+const normalizeDataSources = (news = []) => {
+  const sourceMap = new Map(knowledgeLensSources.map(source => [source.name, source]));
+  news.forEach(event => {
+    const name = `${event.currency || 'FX'} ${event.title || 'Economic event'}`.trim();
+    sourceMap.set(name, {
+      name,
+      url: event.sourceUrl || 'https://www.forexfactory.com/calendar',
+      usedFor: `${event.impact || 'Unknown'} impact macro validation at ${event.time || 'TBA'}`
+    });
+  });
+  sourceMap.set('Forex Factory Economic Calendar', {
+    name: 'Forex Factory Economic Calendar',
+    url: 'https://www.forexfactory.com/calendar',
+    usedFor: 'Macro-event cross-check and red-folder risk validation'
+  });
+  return [...sourceMap.values()];
+};
+
+const buildEvidenceContext = (news = []) => {
+  const events = news.slice(0, 40).map(event => [
+    event.time || 'TBA',
+    event.currency || 'FX',
+    event.title || 'Economic event',
+    `Impact: ${event.impact || 'Unknown'}`,
+    event.actual ? `Actual: ${event.actual}` : '',
+    event.forecast ? `Forecast: ${event.forecast}` : '',
+    event.previous ? `Previous: ${event.previous}` : '',
+    event.sourceUrl ? `Source: ${event.sourceUrl}` : 'Source: https://www.forexfactory.com/calendar'
+  ].filter(Boolean).join(' | '));
+
+  return `STRICT KNOWLEDGE LENS:
+${STRICT_TRADING_KNOWLEDGE}
+
+VERIFICATION DATA SOURCES AVAILABLE TO THIS AUDIT:
+${normalizeDataSources(news).map(source => `- ${source.name}${source.url ? ` (${source.url})` : ''}: ${source.usedFor}`).join('\n')}
+
+CURRENT MARKET DATA SEARCH RESULTS:
+${events.length ? events.join('\n') : '- No current calendar events were provided by the app. Mark macro claims unverified unless the chart itself supports them.'}`;
+};
 
 const readRequestBody = async (request) => {
   const chunks = [];
@@ -404,7 +469,9 @@ const emptyAnalysis = {
   frameworks: [],
   disciplineScore: 0,
   unresolvedQuestions: [],
-  suggestedActions: []
+  suggestedActions: [],
+  dataSources: [],
+  verificationSummary: ''
 };
 
 const fetchNewsCalendar = async () => {
@@ -431,17 +498,23 @@ const fetchNewsCalendar = async () => {
 const analyzeChatData = async ({ messages = [], news = [] }) => {
   const snippet = messages.slice(-150).map(m => `[${m.timestamp}] ${m.sender}: ${m.text}`).join('\n');
   const newsContext = news.map(n => `${n.time} - ${n.currency} ${n.title} (Impact: ${n.impact})`).join('\n');
+  const evidenceContext = buildEvidenceContext(news);
 
   return groqJson({
     model: reasoningModel,
-    system: `You are an Institutional Audit Engine. ${STRICT_TRADING_KNOWLEDGE}. Use deep reasoning to identify if traders are ignoring high-impact news or violating Douglas's principles during volatility.`,
+    system: `You are an Institutional Audit Engine. ${STRICT_TRADING_KNOWLEDGE}. Use deep reasoning to identify if traders are ignoring high-impact news or violating Douglas's principles during volatility. Verify every claim against the strict knowledge lens and supplied market data. Correct or mark unsupported claims as unverified.`,
     user: `CONDUCT DEEP AUDIT: Analyze this trader conversation considering the current MACRO NEWS environment.
 
     Macro Calendar Data:
     ${newsContext}
 
+    Evidence Context:
+    ${evidenceContext}
+
     Transcript:
     ${snippet}
+
+For each framework and macro impact, cite the lens or market data source used. Populate dataSources and verificationSummary. If the supplied data does not prove a claim, correct it or mark the uncertainty in unresolvedQuestions.
 
 Return this JSON shape:
 ${analysisShape(false)}`,
@@ -452,6 +525,7 @@ ${analysisShape(false)}`,
 
 const analyzeTradingImage = async ({ base64Data, mimeType, news = [] }) => {
   const newsContext = news.map(n => `${n.time} - ${n.currency} ${n.title} (Impact: ${n.impact})`).join('\n');
+  const evidenceContext = buildEvidenceContext(news);
   const dataUrl = `data:${mimeType};base64,${base64Data}`;
   const response = await fetch(groqUrl, {
     method: 'POST',
@@ -464,7 +538,7 @@ const analyzeTradingImage = async ({ base64Data, mimeType, news = [] }) => {
       messages: [
         {
           role: 'system',
-          content: `You are a Visual Institutional Auditor. ${STRICT_TRADING_KNOWLEDGE}. Return only valid JSON. Do not wrap the JSON in markdown.`
+          content: `You are a Visual Institutional Auditor. ${STRICT_TRADING_KNOWLEDGE}. You must strictly follow this knowledge lens and the supplied market data sources. Verify every annotation claim against visible chart evidence plus the calendar/source context. If a claim is unsupported, correct it or mark it Unverified instead of presenting it as fact. Return only valid JSON. Do not wrap the JSON in markdown.`
         },
         {
           role: 'user',
@@ -474,7 +548,19 @@ const analyzeTradingImage = async ({ base64Data, mimeType, news = [] }) => {
               text: `DEEP VISUAL AUDIT: Identify structure strictly via SMC/PA/Goldman. Cross-reference this chart setup with the following economic events:
               ${newsContext}
 
+Evidence Context:
+${evidenceContext}
+
 Every substantive visual chart finding you mention anywhere in the JSON must also appear in annotations. This includes structure, liquidity, support/resistance, order blocks, psychology zones, framework findings, macro-risk zones, and suggested chart actions. Use normalized box_2d coordinates [ymin, xmin, ymax, xmax] from 0 to 1000. If a finding applies to the whole chart or cannot be localized, use a broad full-chart or zone-level box instead of omitting it.
+
+Each annotation must include:
+- source: the analysis category, such as Visual detection, Grounding Matrix, Macro Impact, or Suggested Action.
+- evidence: the visible chart feature or market/news data that proves it.
+- evidenceSource: the exact lens/source name or calendar event/source URL used.
+- verificationStatus: Verified only when supported by visible chart data and/or provided market data; Corrected when you adjusted the claim to match evidence; Unverified when the supplied evidence cannot prove it.
+- correction: the corrected statement when verificationStatus is Corrected, otherwise an empty string.
+
+Populate dataSources with all lens and market/news sources used. Populate verificationSummary with what was verified, corrected, or left unverified.
 
 Return this JSON shape:
 ${analysisShape(true)}`
@@ -503,15 +589,21 @@ ${analysisShape(true)}`
 
 const synthesizeGlobalAudit = async ({ results = [] }) => {
   const summaries = results.map((r, i) => `Audit ${i + 1} Summary: ${r.summary}\nPsychology: ${r.psychologyInsights}\nTechnical: ${r.strategyCritique}`).join('\n---\n');
+  const dataSources = results.flatMap(result => result.dataSources || []);
 
   return groqJson({
     model: reasoningModel,
-    system: `You are the Master Performance Auditor. ${STRICT_TRADING_KNOWLEDGE}. Synthesize all technical, psychological, and macro context data into a single master report.`,
+    system: `You are the Master Performance Auditor. ${STRICT_TRADING_KNOWLEDGE}. Synthesize all technical, psychological, and macro context data into a single master report. Preserve source-backed verification and correct unsupported conclusions.`,
     user: `DEEP REASONING SYNTHESIS: Cross-analyze all uploaded charts, logs, and macro news impacts.
     Produce a final consolidated institutional conclusion.
 
     Audits to Synthesize:
     ${summaries}
+
+    Sources Already Used:
+    ${dataSources.map(source => `- ${source.name}${source.url ? ` (${source.url})` : ''}: ${source.usedFor}`).join('\n')}
+
+Keep only conclusions supported by the strict knowledge lens or cited market data. Populate dataSources and verificationSummary.
 
 Return this JSON shape:
 ${analysisShape(false)}`,

@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnalysisResult } from '../types';
-import { Brain, Target, ShieldCheck, Award, Zap, AlertCircle, BookOpen, CheckCircle2, XCircle, MinusCircle, Layers, Fingerprint, Globe } from 'lucide-react';
+import { Brain, Target, ShieldCheck, Award, Zap, AlertCircle, BookOpen, CheckCircle2, XCircle, MinusCircle, Layers, Fingerprint, Globe, ExternalLink } from 'lucide-react';
 
 interface AnalysisViewProps {
   analysis: AnalysisResult;
@@ -43,6 +43,40 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ analysis, isGlobal, 
           </div>
         </div>
       </div>
+
+      {(analysis.verificationSummary || (analysis.dataSources && analysis.dataSources.length > 0)) && (
+        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+          <div className="flex items-center justify-between gap-4 mb-6">
+            <h3 className="text-lg font-black text-slate-800 flex items-center gap-3 uppercase tracking-wider">
+              <ShieldCheck className="text-emerald-600" size={20} />
+              Evidence Verification
+            </h3>
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Strict lens + data search</span>
+          </div>
+          {analysis.verificationSummary && (
+            <p className="mb-6 rounded-2xl bg-emerald-50 p-4 text-sm font-medium leading-relaxed text-emerald-900 border border-emerald-100">
+              {analysis.verificationSummary}
+            </p>
+          )}
+          {analysis.dataSources && analysis.dataSources.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {analysis.dataSources.slice(0, 10).map((source, i) => (
+                <div key={`${source.name}-${i}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <h4 className="text-xs font-black uppercase text-slate-800">{source.name}</h4>
+                    {source.url && (
+                      <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:text-indigo-700">
+                        <ExternalLink size={14} />
+                      </a>
+                    )}
+                  </div>
+                  <p className="mt-2 text-[11px] font-medium leading-relaxed text-slate-500">{source.usedFor}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {analysis.newsImpacts && analysis.newsImpacts.length > 0 && (
         <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
@@ -186,4 +220,3 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ analysis, isGlobal, 
     </div>
   );
 };
-

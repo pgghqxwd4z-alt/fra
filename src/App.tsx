@@ -66,17 +66,39 @@ const textToZoneBox = (text: string, index: number): [number, number, number, nu
   return [bands[row][0], 120, bands[row][1], 880];
 };
 
+const getEvidenceSource = (analysis: AnalysisResult, text: string): string => {
+  const value = text.toLowerCase();
+  const matchedNews = analysis.newsImpacts?.find(item => (
+    value.includes(item.event.toLowerCase()) || item.event.toLowerCase().includes(value.slice(0, 24))
+  ));
+  if (matchedNews?.sourceUrl) return matchedNews.sourceUrl;
+  const matchedDataSource = analysis.dataSources?.find(source => (
+    value.includes(source.name.toLowerCase()) || source.usedFor.toLowerCase().split(/\W+/).some(token => token.length > 5 && value.includes(token))
+  ));
+  return matchedDataSource?.url || matchedDataSource?.name || 'Strict trading knowledge lens';
+};
+
+const getVerificationStatus = (source: string, evidence?: string): ChartAnnotation['verificationStatus'] => {
+  if (!evidence) return source === 'Visual detection' ? 'Verified' : 'Unverified';
+  return evidence.toLowerCase().includes('unverified') ? 'Unverified' : 'Verified';
+};
+
 const buildCompleteChartAnnotations = (analysis: AnalysisResult): ChartAnnotation[] => {
   const existing = (analysis.annotations || []).map((annotation, index) => {
     const text = `${annotation.type} ${annotation.label} ${annotation.insight}`;
     const type = annotationTypes.includes(annotation.type) ? annotation.type : fallbackAnnotationType(text);
+    const source = annotation.source || 'Visual detection';
     return {
       ...annotation,
       type,
       label: annotation.label || `${type} finding ${index + 1}`,
       insight: annotation.insight || annotation.label || 'AI chart finding',
       box_2d: normalizeBox(isValidBox(annotation.box_2d) ? annotation.box_2d : textToZoneBox(text, index)),
-      source: annotation.source || 'Visual detection'
+      source,
+      evidence: annotation.evidence || 'Visible chart structure from uploaded image',
+      evidenceSource: annotation.evidenceSource || getEvidenceSource(analysis, text),
+      verificationStatus: annotation.verificationStatus || getVerificationStatus(source, annotation.evidence || 'Visible chart structure from uploaded image'),
+      correction: annotation.correction || ''
     };
   });
 
@@ -85,19 +107,31 @@ const buildCompleteChartAnnotations = (analysis: AnalysisResult): ChartAnnotatio
       type: fallbackAnnotationType(`${item.framework} ${item.insight}`),
       label: item.framework,
       insight: `${item.status}: ${item.insight}`,
-      source: 'Grounding Matrix'
+      source: 'Grounding Matrix',
+      evidence: item.evidence || item.source || 'Strict trading framework alignment check',
+      evidenceSource: item.source || getEvidenceSource(analysis, `${item.framework} ${item.insight}`),
+      verificationStatus: getVerificationStatus('Grounding Matrix', item.evidence || item.source),
+      correction: ''
     })),
     ...(analysis.newsImpacts || []).map(item => ({
       type: fallbackAnnotationType(`${item.event} ${item.impactOnTechnicals} ${item.recommendation}`),
       label: item.event,
       insight: `${item.impactOnTechnicals} ${item.recommendation}`,
-      source: 'Macro Impact'
+      source: 'Macro Impact',
+      evidence: item.alignmentWithDouglas,
+      evidenceSource: item.sourceUrl || getEvidenceSource(analysis, item.event),
+      verificationStatus: getVerificationStatus('Macro Impact', item.alignmentWithDouglas),
+      correction: ''
     })),
     ...analysis.suggestedActions.map((item, index) => ({
       type: fallbackAnnotationType(item),
       label: `Action ${index + 1}`,
       insight: item,
-      source: 'Suggested Action'
+      source: 'Suggested Action',
+      evidence: analysis.verificationSummary || 'Derived from verified audit findings',
+      evidenceSource: getEvidenceSource(analysis, item),
+      verificationStatus: getVerificationStatus('Suggested Action', analysis.verificationSummary),
+      correction: ''
     }))
   ].map((item, index) => ({
     ...item,

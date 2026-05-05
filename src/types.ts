@@ -30,6 +30,7 @@ export interface NewsImpact {
   impactOnTechnicals: string;
   alignmentWithDouglas: string;
   recommendation: string;
+  sourceUrl?: string;
 }
 
 export interface ImageAnnotation {
@@ -38,6 +39,10 @@ export interface ImageAnnotation {
   box_2d: [number, number, number, number];
   insight: string;
   source?: string;
+  evidence?: string;
+  evidenceSource?: string;
+  verificationStatus?: 'Verified' | 'Corrected' | 'Unverified';
+  correction?: string;
 }
 
 export interface ManualDrawing {
@@ -53,6 +58,13 @@ export interface FrameworkInsight {
   status: 'Aligned' | 'Violation' | 'Neutral';
   insight: string;
   source?: string;
+  evidence?: string;
+}
+
+export interface DataSource {
+  name: string;
+  url?: string;
+  usedFor: string;
 }
 
 export interface AnalysisResult {
@@ -67,6 +79,8 @@ export interface AnalysisResult {
   suggestedActions: string[];
   annotations?: ImageAnnotation[];
   newsImpacts?: NewsImpact[];
+  dataSources?: DataSource[];
+  verificationSummary?: string;
 }
 
 export interface AnalyzedImage {

@@ -2,7 +2,8 @@ import React, { useRef, useState } from 'react';
 import { ImageAnnotation, ManualDrawing } from '../types';
 import { 
   Maximize2, Minimize2, Eye, EyeOff, List, Crosshair, ZoomIn, ZoomOut, RotateCcw,
-  Square, Circle, Minus, Type, MousePointer2, Trash2, Eraser, Hash, Check, X as CloseIcon
+  Square, Circle, Minus, Type, MousePointer2, Trash2, Eraser, Hash, Check, X as CloseIcon,
+  ShieldCheck, AlertTriangle, Wrench
 } from 'lucide-react';
 
 interface ChartAnnotatorProps {
@@ -50,6 +51,20 @@ export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annota
     { name: 'Liquidity', hex: '#f97316' },
     { name: 'Neutral', hex: '#94a3b8' }
   ];
+
+  const verificationStyles: Record<string, string> = {
+    Verified: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30',
+    Corrected: 'bg-amber-500/15 text-amber-300 border-amber-400/30',
+    Unverified: 'bg-rose-500/15 text-rose-300 border-rose-400/30'
+  };
+
+  const getVerificationIcon = (status?: string) => {
+    switch (status) {
+      case 'Corrected': return <Wrench size={12} />;
+      case 'Unverified': return <AlertTriangle size={12} />;
+      default: return <ShieldCheck size={12} />;
+    }
+  };
 
   const getAnnotationStyle = (box: [number, number, number, number], type: string, isHovered: boolean) => {
     const [ymin, xmin, ymax, xmax] = box;
@@ -468,7 +483,28 @@ export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annota
                 {annotations[hoveredIndex].source && (
                   <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-indigo-300">{annotations[hoveredIndex].source}</p>
                 )}
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest ${verificationStyles[annotations[hoveredIndex].verificationStatus || 'Verified']}`}>
+                    {getVerificationIcon(annotations[hoveredIndex].verificationStatus)}
+                    {annotations[hoveredIndex].verificationStatus || 'Verified'}
+                  </span>
+                  {annotations[hoveredIndex].evidenceSource && (
+                    <span className="rounded-full bg-slate-900/70 px-2 py-1 text-[9px] font-bold uppercase tracking-widest text-slate-300">
+                      {annotations[hoveredIndex].evidenceSource}
+                    </span>
+                  )}
+                </div>
                 <p className="text-indigo-100/80 text-sm leading-relaxed max-w-2xl">{annotations[hoveredIndex].insight}</p>
+                {annotations[hoveredIndex].evidence && (
+                  <p className="mt-3 text-[11px] font-medium leading-relaxed text-indigo-100/60">
+                    Evidence: {annotations[hoveredIndex].evidence}
+                  </p>
+                )}
+                {annotations[hoveredIndex].correction && (
+                  <p className="mt-2 text-[11px] font-black leading-relaxed text-amber-200">
+                    Correction: {annotations[hoveredIndex].correction}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -506,6 +542,23 @@ export const ChartAnnotator: React.FC<ChartAnnotatorProps> = ({ imageUrl, annota
                   </div>
                   <h5 className="font-bold text-slate-800 text-xs">{ann.label}</h5>
                   {ann.source && <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-slate-400">{ann.source}</p>}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-widest ${
+                      ann.verificationStatus === 'Corrected'
+                        ? 'border-amber-200 bg-amber-50 text-amber-700'
+                        : ann.verificationStatus === 'Unverified'
+                          ? 'border-rose-200 bg-rose-50 text-rose-700'
+                          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    }`}>
+                      {getVerificationIcon(ann.verificationStatus)}
+                      {ann.verificationStatus || 'Verified'}
+                    </span>
+                    {ann.evidenceSource && (
+                      <span className="truncate rounded-full bg-white px-2 py-0.5 text-[8px] font-bold uppercase tracking-widest text-slate-400 max-w-[180px]">
+                        {ann.evidenceSource}
+                      </span>
+                    )}
+                  </div>
                 </button>
               ))
             )}
