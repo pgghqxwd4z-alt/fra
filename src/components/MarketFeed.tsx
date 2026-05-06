@@ -8,21 +8,6 @@ interface TickerData {
   isUp: boolean;
 }
 
-interface BinanceTickerPayload {
-  s?: string;
-  c?: string;
-  P?: string;
-  q?: string;
-}
-
-interface BinanceStreamMessage {
-  data?: BinanceTickerPayload;
-  s?: string;
-  c?: string;
-  P?: string;
-  q?: string;
-}
-
 const SYMBOLS = ['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt', 'adausdt', 'dotusdt'];
 
 const MarketFeed: React.FC = () => {
@@ -31,31 +16,22 @@ const MarketFeed: React.FC = () => {
 
   useEffect(() => {
     const streams = SYMBOLS.map(s => `${s}@ticker`).join('/');
-    ws.current = new WebSocket(`wss://data-stream.binance.vision:443/stream?streams=${streams}`);
+    ws.current = new WebSocket(`wss://stream.binance.com:9443/ws/${streams}`);
 
     ws.current.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data) as BinanceStreamMessage;
-        const data = message.data ?? message;
+      const data = JSON.parse(event.data);
+      const symbol = data.s.toLowerCase();
 
-        if (!data.s || !data.c || !data.P || !data.q) return;
-
-        const { s, c, P, q } = data;
-        const symbol = s.toLowerCase();
-
-        setTickers(prev => ({
-          ...prev,
-          [symbol]: {
-            symbol: s.replace('USDT', ''),
-            price: parseFloat(c).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-            change: parseFloat(P).toFixed(2),
-            volume: (parseFloat(q) / 1000000).toFixed(2) + 'M',
-            isUp: parseFloat(P) >= 0
-          }
-        }));
-      } catch {
-        return;
-      }
+      setTickers(prev => ({
+        ...prev,
+        [symbol]: {
+          symbol: data.s.replace('USDT', ''),
+          price: parseFloat(data.c).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          change: parseFloat(data.P).toFixed(2),
+          volume: (parseFloat(data.q) / 1000000).toFixed(2) + 'M',
+          isUp: parseFloat(data.P) >= 0
+        }
+      }));
     };
 
     return () => {

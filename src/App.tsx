@@ -10,9 +10,7 @@ import MarketFeed from './components/MarketFeed';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AnalysisTab>(AnalysisTab.CHAT);
-  // Default closed so the header toggle button is reachable on mobile.
-  // On lg+ screens the sidebar is forced visible via `lg:translate-x-0` in Sidebar.
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -37,7 +35,6 @@ const App: React.FC = () => {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
