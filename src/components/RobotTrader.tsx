@@ -79,10 +79,18 @@ const buildCorrectedPlan = (plan: RobotTradePlan, quote: LiveQuote | null): Robo
 };
 
 const RobotTrader: React.FC = () => {
+  const [draftSymbol, setDraftSymbol] = useState(ROBOT_TRADE_PLAN.symbol);
   const [symbol, setSymbol] = useState(ROBOT_TRADE_PLAN.symbol);
   const [mode, setMode] = useState<BotMode>('Researching');
   const [quote, setQuote] = useState<LiveQuote | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
   const [lastVerified, setLastVerified] = useState<number | null>(null);
+
+  const applySymbol = () => {
+    const normalized = draftSymbol.replace(/[^a-z0-9]/gi, '').toUpperCase();
+    setDraftSymbol(normalized);
+    setSymbol(normalized);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -90,11 +98,18 @@ const RobotTrader: React.FC = () => {
     const fetchQuote = async () => {
       try {
         const normalized = symbol.replace(/[^a-z0-9]/gi, '').toUpperCase();
+        if (!normalized) {
+          setQuote(null);
+          setQuoteError('Enter a Binance symbol to verify live data.');
+          setLastVerified(null);
+          return;
+        }
         const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${normalized}`);
         if (!response.ok) throw new Error('Quote unavailable');
         const data = await response.json();
         if (cancelled) return;
 
+        setQuoteError(null);
         setQuote({
           price: Number(data.lastPrice),
           change: Number(data.priceChangePercent),
@@ -105,7 +120,9 @@ const RobotTrader: React.FC = () => {
         setLastVerified(Date.now());
       } catch {
         if (!cancelled) {
-          setMode('Paused');
+          setQuote(null);
+          setQuoteError('Live quote unavailable. Correct the symbol or retry when the feed reconnects.');
+          setLastVerified(null);
         }
       }
     };
@@ -123,16 +140,16 @@ const RobotTrader: React.FC = () => {
 
   useEffect(() => {
     if (mode === 'Paused') return;
-    if (plan.verificationStatus === 'Verified') {
-      setMode('Armed');
-    } else if (quote && plan.confidence < 50) {
-      setMode('Correcting');
-    } else {
-      setMode('Researching');
-    }
+    const nextMode: BotMode = plan.verificationStatus === 'Verified'
+      ? 'Armed'
+      : quote && plan.confidence < 50
+        ? 'Correcting'
+        : 'Researching';
+
+    if (nextMode !== mode) setMode(nextMode);
   }, [mode, plan.confidence, plan.verificationStatus, quote]);
 
-  const riskDollars = quote ? quote.price * (plan.maxRiskPercent / 100) : 0;
+  const unitRisk = Math.abs(plan.entry - plan.stopLoss);
 
   return (
     <div className="h-full overflow-y-auto custom-scrollbar space-y-6 pb-8">
@@ -152,8 +169,12 @@ const RobotTrader: React.FC = () => {
 
           <div className="flex flex-col sm:flex-row gap-3">
             <input
-              value={symbol}
-              onChange={(event) => setSymbol(event.target.value.toUpperCase())}
+              value={draftSymbol}
+              onChange={(event) => setDraftSymbol(event.target.value.toUpperCase())}
+              onBlur={applySymbol}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') applySymbol();
+              }}
               className="bg-black/40 border border-white/10 rounded-2xl px-5 py-3 text-white font-mono text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
               aria-label="Trading symbol"
             />
@@ -189,10 +210,10 @@ const RobotTrader: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-            <Metric label="Live Price" value={quote ? formatPrice(quote.price) : 'Syncing'} color="text-white" />
+            <Metric label="Live Price" value={quote ? formatPrice(quote.price) : quoteError ? 'Unavailable' : 'Syncing'} color={quoteError ? 'text-amber-400' : 'text-white'} />
             <Metric label="24h Change" value={quote ? `${quote.change.toFixed(2)}%` : '--'} color={quote && quote.change >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
             <Metric label="Confidence" value={`${plan.confidence}%`} color={plan.confidence >= 70 ? 'text-emerald-400' : 'text-amber-400'} />
-            <Metric label="Verification" value={plan.verificationStatus} color={plan.verificationStatus === 'Verified' ? 'text-emerald-400' : 'text-amber-400'} />
+            <Metric label="Verification" value={quoteError ? 'Needs Review' : plan.verificationStatus} color={plan.verificationStatus === 'Verified' && !quoteError ? 'text-emerald-400' : 'text-amber-400'} />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
@@ -208,8 +229,9 @@ const RobotTrader: React.FC = () => {
               <div>
                 <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-2">Correction Engine</p>
                 <p className="text-slate-300 leading-relaxed">{plan.correctionAction}</p>
+                {quoteError && <p className="text-amber-300 text-sm mt-3">{quoteError}</p>}
                 <p className="text-[10px] text-slate-500 font-mono mt-3">
-                  Max risk: {plan.maxRiskPercent}% per idea {quote ? `(~${formatPrice(riskDollars)} per 1 unit)` : ''}.
+                  Max account risk: {plan.maxRiskPercent}% per idea. 1-unit plan risk: {formatPrice(unitRisk)}.
                   Last verified: {lastVerified ? new Date(lastVerified).toLocaleTimeString() : 'waiting for live data'} via {quote?.source || 'market sync'}.
                 </p>
               </div>
