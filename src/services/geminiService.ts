@@ -1,8 +1,9 @@
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
-const GROQ_API_URL = `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions`;
+const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '';
+const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
 
 function getGroqHeaders(): Record<string, string> {
-  if (!GROQ_PROXY_URL) {
+  if (!GROQ_API_URL) {
     throw new Error('Missing Groq proxy configuration. Set VITE_GROQ_PROXY_URL.');
   }
 
@@ -106,8 +107,8 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
 
     // Fetch ticker + recent klines in parallel
     const [tickerRes, klinesRes] = await Promise.all([
-      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSymbol}`).catch(() => null),
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=1h&limit=50`).catch(() => null),
+      fetch(`${BINANCE_REST_URL}/ticker/24hr?symbol=${binanceSymbol}`).catch(() => null),
+      fetch(`${BINANCE_REST_URL}/klines?symbol=${binanceSymbol}&interval=1h&limit=50`).catch(() => null),
     ]);
 
     if (!tickerRes || !tickerRes.ok) return null;
@@ -133,8 +134,11 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
     const lows = candles.map(c => c.low);
     const recentHigh = highs.length ? Math.max(...highs) : null;
     const recentLow = lows.length ? Math.min(...lows) : null;
-    const pivotPoint = recentHigh && recentLow && ticker.lastPrice
-      ? ((recentHigh + recentLow + parseFloat(ticker.lastPrice)) / 3).toFixed(2)
+    const lastPrice = Number(ticker.lastPrice);
+    const hasPivotInputs = recentHigh !== null && recentLow !== null && Number.isFinite(lastPrice);
+    const pivotValue = hasPivotInputs ? (recentHigh + recentLow + lastPrice) / 3 : null;
+    const pivotPoint = pivotValue !== null
+      ? pivotValue.toFixed(2)
       : 'N/A';
 
     const keyLevels = [
@@ -146,19 +150,19 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       recentHigh ? `50-candle High: ${recentHigh}` : '',
       recentLow ? `50-candle Low: ${recentLow}` : '',
       `Pivot Point: ${pivotPoint}`,
-      recentHigh && recentLow && pivotPoint !== 'N/A' ? `R1: ${(2 * parseFloat(pivotPoint) - recentLow).toFixed(2)}` : '',
-      recentHigh && recentLow && pivotPoint !== 'N/A' ? `S1: ${(2 * parseFloat(pivotPoint) - recentHigh).toFixed(2)}` : '',
+      pivotValue !== null && recentLow !== null ? `R1: ${(2 * pivotValue - recentLow).toFixed(2)}` : '',
+      pivotValue !== null && recentHigh !== null ? `S1: ${(2 * pivotValue - recentHigh).toFixed(2)}` : '',
     ].filter(Boolean).join('\n');
 
     return {
       symbol: binanceSymbol,
-      currentPrice: parseFloat(ticker.lastPrice),
+      currentPrice: Number.isFinite(lastPrice) ? lastPrice : null,
       high24h: parseFloat(ticker.highPrice),
       low24h: parseFloat(ticker.lowPrice),
       volume24h: parseFloat(ticker.volume).toLocaleString(),
       recentCandles: candles.slice(-10), // Last 10 candles for validation
       keyLevels,
-      source: 'Binance API (Live)',
+      source: 'Binance Market Data API (Live)',
     };
   } catch {
     return null;
@@ -483,6 +487,8 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 
 // Enhanced callGroq with orchestrator monitoring
 async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+  const headers = getGroqHeaders();
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
@@ -491,7 +497,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       const timeoutId = setTimeout(() => controller.abort(), 90000);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers: getGroqHeaders(),
+        headers,
         body: JSON.stringify({
           model,
           messages,
@@ -1962,7 +1968,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
 
       // ===== STAGE 4: PROBABILISTIC ENTRY ANALYSIS — Institutional/Bank-Level Synthesis =====
       // This specialized AI synthesizes ALL lens outputs into actionable institutional entry zones
-      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus !== 'degraded') {
+      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus === 'healthy') {
         try {
           console.log(`[Orchestrator] Stage 4: Probabilistic Entry Analysis — synthesizing ${allAnalysisParts.length} lens outputs...`);
           await new Promise(resolve => setTimeout(resolve, 5000)); // Cooldown before synthesis
@@ -2115,6 +2121,8 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
         }
       } else if (allAnalysisParts.length < 2) {
         console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — need 2+ lens analyses (have ${allAnalysisParts.length}).`);
+      } else {
+        console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — API status is ${pipelineHealth.apiStatus}.`);
       }
 
       // ===== ORCHESTRATOR: Post-pipeline health summary =====

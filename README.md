@@ -4,21 +4,21 @@ This template provides a minimal setup to get React working in Vite with HMR and
 
 ## Environment
 
-QuantSage uses Groq for AI chat and chart analysis. Public deployments should
-call a server-side Groq proxy so the Groq API key is never exposed in the
-browser bundle. Create a local `.env.local` file before running the app:
+QuantSage uses Groq through a server-side proxy for AI chat and chart analysis.
+Create a local `.env.local` file before running the app:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Then point the app at the Groq proxy:
+Then point the frontend at the proxy:
 
 ```env
-VITE_GROQ_PROXY_URL=https://your-groq-proxy.example.com
+VITE_GROQ_PROXY_URL=https://your-proxy.example.com
 ```
 
-Never commit `.env.local` or real API keys.
+Never commit `.env.local` or real API keys. The Groq key belongs only on the
+FastAPI proxy in `proxy/` as server-side `GROQ_API_KEY`.
 
 Currently, two official plugins are available:
 
