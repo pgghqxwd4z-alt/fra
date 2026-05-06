@@ -21,8 +21,9 @@ Never commit `.env.local` or real API keys.
 
 For public deployments, do not set `VITE_GROQ_API_KEY` in the frontend build
 because Vite embeds `VITE_` variables into browser JavaScript. Deploy the
-FastAPI proxy in `proxy/` with server-side `GROQ_API_KEY`, then build the
-frontend with:
+FastAPI proxy in `proxy/` with server-side `GROQ_API_KEY`, and optionally
+`OPENAI_API_KEY` for GPT-4o vision fallback when Groq vision is rate-limited or
+temporarily unavailable. Then build the frontend with:
 
 ```env
 VITE_GROQ_PROXY_URL=https://your-proxy.example.com
