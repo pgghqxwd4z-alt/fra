@@ -7,6 +7,7 @@ import StrategyBoard from './components/StrategyBoard';
 import KnowledgeBase from './components/KnowledgeBase';
 import Framework from './components/Framework';
 import MarketFeed from './components/MarketFeed';
+import RobotTrader from './components/RobotTrader';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AnalysisTab>(AnalysisTab.CHAT);
@@ -20,6 +21,8 @@ const App: React.FC = () => {
         return <TradingSage />;
       case AnalysisTab.VISUALIZER:
         return <Visualizer />;
+      case AnalysisTab.ROBOT_TRADER:
+        return <RobotTrader />;
       case AnalysisTab.STRATEGIES:
         return <StrategyBoard />;
       case AnalysisTab.WISDOM:

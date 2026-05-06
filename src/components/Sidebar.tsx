@@ -12,6 +12,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isOpen, onClo
   const menuItems = [
     { id: AnalysisTab.CHAT, icon: 'fa-robot', label: 'AI Advisor' },
     { id: AnalysisTab.VISUALIZER, icon: 'fa-chart-line', label: 'Deep Visualizer' },
+    { id: AnalysisTab.ROBOT_TRADER, icon: 'fa-satellite-dish', label: 'Robot Trader' },
     { id: AnalysisTab.FRAMEWORK, icon: 'fa-layer-group', label: 'Synthesis Workflow' },
     { id: AnalysisTab.STRATEGIES, icon: 'fa-chess', label: 'Strategy Hub' },
     { id: AnalysisTab.WISDOM, icon: 'fa-book-open', label: 'Wisdom Vault' },

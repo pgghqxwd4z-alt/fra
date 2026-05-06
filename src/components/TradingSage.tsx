@@ -11,7 +11,7 @@ const TradingSage: React.FC = () => {
   useEffect(() => {
     const welcome: Message = {
       role: 'model',
-      content: "Welcome to the QuantSage Institutional Terminal. I can analyze market trends, news, and setups using Smart Money Concepts and real-time grounding. How can I assist your edge today?",
+      content: "Welcome to the QuantSage Institutional Terminal. I can analyze market trends, news, setups, and robot-trader execution plans using live grounding, SMC, pure price action, institutional flow, risk discipline, and correction logic. How can I assist your edge today?",
       timestamp: Date.now()
     };
     const saved = localStorage.getItem('quantsage_chat_history');
@@ -123,7 +123,7 @@ const TradingSage: React.FC = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask about markets, news, or strategies..."
+            placeholder="Ask for market research, live verification, entries, exits, or corrections..."
             className="w-full bg-slate-900 border border-white/10 rounded-2xl py-4 pl-6 pr-16 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 text-white placeholder:text-white/20 transition-all shadow-inner"
           />
           <button

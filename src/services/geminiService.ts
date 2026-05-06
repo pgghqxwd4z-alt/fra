@@ -1,14 +1,20 @@
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
+const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor and robot-trader planner.
 Your knowledge base is strictly derived from:
 1. Mark Douglas (Trading in the Zone, The Disciplined Trader) - Focus on probabilistic thinking and internal discipline.
 2. Jack Schwager (Market Wizards) - Focus on risk management and the mindset of winners.
 3. Goldman Sachs Institutional Strategies - Focus on macro flows and liquidity voids.
 4. Smart Money Concepts (SMC) - Focus on Order Blocks (OB) and Fair Value Gaps (FVG).
 5. Pure Price Action - Focus on clean chart mechanics.
-Provide detailed, institutional-grade analysis grounded in these frameworks.`;
+Provide detailed, institutional-grade analysis grounded in these frameworks.
+When asked for entries, exits, or robot-trader decisions, always respond with:
+- research summary and live-data verification status;
+- trade direction or WAIT decision;
+- exact entry, stop loss, take profit, invalidation, and correction trigger when sufficient data exists;
+- maximum risk per trade and psychological discipline guardrail;
+- an explicit warning that this is decision support, not guaranteed profit or financial advice.`;
 
 interface ChatResponse {
   text: string;
@@ -1848,7 +1854,7 @@ IMPORTANT:
         }
 
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
-        let cleanAnalysis = analysisSource
+        const cleanAnalysis = analysisSource
           .replace(/```json[\s\S]*?```/g, '')
           .replace(/```[\s\S]*?```/g, '')
           .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
@@ -1918,7 +1924,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
               }
 
               // Clean the fallback analysis text
-              let cleanFallback = fallbackText
+              const cleanFallback = fallbackText
                 .replace(/```json[\s\S]*?```/g, '')
                 .replace(/```[\s\S]*?```/g, '')
                 .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -2090,7 +2096,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
           }
 
           // Clean the synthesis text
-          let cleanSynthesis = synthesisText
+          const cleanSynthesis = synthesisText
             .replace(/```json[\s\S]*?```/g, '')
             .replace(/```[\s\S]*?```/g, '')
             .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
