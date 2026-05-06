@@ -146,8 +146,8 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       recentHigh ? `50-candle High: ${recentHigh}` : '',
       recentLow ? `50-candle Low: ${recentLow}` : '',
       `Pivot Point: ${pivotPoint}`,
-      recentHigh && recentLow ? `R1: ${(2 * parseFloat(pivotPoint!) - recentLow).toFixed(2)}` : '',
-      recentHigh && recentLow ? `S1: ${(2 * parseFloat(pivotPoint!) - recentHigh).toFixed(2)}` : '',
+      recentHigh && recentLow && pivotPoint !== 'N/A' ? `R1: ${(2 * parseFloat(pivotPoint) - recentLow).toFixed(2)}` : '',
+      recentHigh && recentLow && pivotPoint !== 'N/A' ? `S1: ${(2 * parseFloat(pivotPoint) - recentHigh).toFixed(2)}` : '',
     ].filter(Boolean).join('\n');
 
     return {
@@ -483,8 +483,6 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 
 // Enhanced callGroq with orchestrator monitoring
 async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
-  const headers = getGroqHeaders();
-
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
@@ -493,7 +491,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       const timeoutId = setTimeout(() => controller.abort(), 90000);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers,
+        headers: getGroqHeaders(),
         body: JSON.stringify({
           model,
           messages,

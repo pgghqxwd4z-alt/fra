@@ -136,7 +136,7 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
 
   useEffect(() => {
     const saved = loadSavedResults();
-    if (saved[strategy.id]) setResult(saved[strategy.id]);
+    setResult(saved[strategy.id] || null);
   }, [strategy.id]);
 
   const runBacktest = useCallback(() => {
