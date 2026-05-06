@@ -12,6 +12,21 @@ interface LiveQuote {
   timestamp: number;
 }
 
+const COINGECKO_IDS: Record<string, string> = {
+  BTC: 'bitcoin',
+  ETH: 'ethereum',
+  SOL: 'solana',
+  BNB: 'binancecoin',
+  ADA: 'cardano',
+  XRP: 'ripple',
+  DOGE: 'dogecoin',
+  AVAX: 'avalanche-2',
+  DOT: 'polkadot',
+  LINK: 'chainlink',
+  LTC: 'litecoin',
+  MATIC: 'matic-network'
+};
+
 const RULE_STACK = [
   'Research news, macro context, session liquidity, and live exchange data before every decision.',
   'Verify price against SMC structure, pure price action, and institutional flow before arming.',
@@ -23,6 +38,53 @@ const RULE_STACK = [
 const formatPrice = (value: number) => '$' + value.toLocaleString(undefined, {
   maximumFractionDigits: value > 100 ? 0 : 4
 });
+
+const baseAssetFromSymbol = (symbol: string) => symbol
+  .replace(/USDT$|USD$|BTC$|ETH$/i, '')
+  .toUpperCase();
+
+const fetchCoinGeckoQuote = async (symbol: string): Promise<LiveQuote | null> => {
+  const asset = baseAssetFromSymbol(symbol);
+  const coinId = COINGECKO_IDS[asset];
+  if (!coinId) return null;
+
+  const response = await fetch(
+    `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`
+  );
+  if (!response.ok) return null;
+
+  const data = await response.json();
+  const quote = data[coinId];
+  if (!quote?.usd) return null;
+
+  return {
+    price: Number(quote.usd),
+    change: Number(quote.usd_24h_change || 0),
+    volume: Number(quote.usd_24h_vol || 0),
+    source: 'CoinGecko simple price',
+    timestamp: Date.now()
+  };
+};
+
+const fetchLiveQuote = async (symbol: string): Promise<LiveQuote> => {
+  try {
+    const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
+    if (!response.ok) throw new Error('Binance unavailable');
+    const data = await response.json();
+
+    return {
+      price: Number(data.lastPrice),
+      change: Number(data.priceChangePercent),
+      volume: Number(data.quoteVolume),
+      source: 'Binance 24h ticker',
+      timestamp: Date.now()
+    };
+  } catch {
+    const fallback = await fetchCoinGeckoQuote(symbol);
+    if (fallback) return fallback;
+    throw new Error('Quote unavailable');
+  }
+};
 
 const buildCorrectedPlan = (plan: RobotTradePlan, quote: LiveQuote | null): RobotTradePlan => {
   if (!quote) return plan;
@@ -104,19 +166,11 @@ const RobotTrader: React.FC = () => {
           setLastVerified(null);
           return;
         }
-        const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${normalized}`);
-        if (!response.ok) throw new Error('Quote unavailable');
-        const data = await response.json();
+        const liveQuote = await fetchLiveQuote(normalized);
         if (cancelled) return;
 
         setQuoteError(null);
-        setQuote({
-          price: Number(data.lastPrice),
-          change: Number(data.priceChangePercent),
-          volume: Number(data.quoteVolume),
-          source: 'Binance 24h ticker',
-          timestamp: Date.now()
-        });
+        setQuote(liveQuote);
         setLastVerified(Date.now());
       } catch {
         if (!cancelled) {
