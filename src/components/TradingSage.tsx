@@ -9,25 +9,16 @@ const TradingSage: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const welcome: Message = {
-      role: 'model',
-      content: "Welcome to the QuantSage Institutional Terminal. I can analyze market trends, news, and setups using Smart Money Concepts and real-time grounding. How can I assist your edge today?",
-      timestamp: Date.now()
-    };
     const saved = localStorage.getItem('quantsage_chat_history');
     if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          setMessages(parsed);
-          return;
-        }
-        localStorage.removeItem('quantsage_chat_history');
-      } catch {
-        localStorage.removeItem('quantsage_chat_history');
-      }
+      setMessages(JSON.parse(saved));
+    } else {
+      setMessages([{
+        role: 'model',
+        content: "Welcome to the QuantSage Institutional Terminal. I can analyze market trends, news, and setups using Smart Money Concepts and real-time grounding. How can I assist your edge today?",
+        timestamp: Date.now()
+      }]);
     }
-    setMessages([welcome]);
   }, []);
 
   useEffect(() => {
