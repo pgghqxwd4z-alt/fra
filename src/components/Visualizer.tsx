@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiService';
+import { geminiService, drawAnnotationsOnCanvas, type VerificationMode } from '../services/geminiService';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
@@ -27,6 +27,7 @@ const Visualizer: React.FC = () => {
   const [showOriginal, setShowOriginal] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
+  const [verificationMode, setVerificationMode] = useState<VerificationMode>('stable');
   const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
   const [processing, setProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -159,7 +160,7 @@ const Visualizer: React.FC = () => {
     setErrorMessage(null);
     try {
       const base64 = image.split(',')[1];
-      const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
+      const result = await geminiService.annotateChart(base64, prompt, selectedLenses, verificationMode);
       
       // Draw visual annotations on the chart image
       if (result.annotations && result.annotations.length > 0) {
@@ -398,6 +399,31 @@ const Visualizer: React.FC = () => {
                     </button>
                   );
                 })}
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[8px] font-bold uppercase tracking-[0.25em] text-white">Live Vision Mode</p>
+                    <p className="text-[7px] uppercase tracking-widest text-white/30">
+                      {verificationMode === 'stable' ? 'Stable Groq — fewer vision calls' : 'Full verification — deeper correction'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setVerificationMode(prev => prev === 'stable' ? 'full' : 'stable')}
+                    className={`px-3 py-1.5 rounded-lg text-[8px] font-bold uppercase tracking-widest border transition-all ${
+                      verificationMode === 'stable'
+                        ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                        : 'bg-violet-500/10 border-violet-500/40 text-violet-300'
+                    }`}
+                  >
+                    {verificationMode === 'stable' ? 'Stable' : 'Full'}
+                  </button>
+                </div>
+                <p className="text-[8px] leading-relaxed text-white/35">
+                  Stable runs Primary + Validator and keeps Annotation Guard only when annotations are weak. Full also runs the Lens Specialist Verifier.
+                </p>
               </div>
 
               <div className="space-y-3 pt-1">

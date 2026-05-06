@@ -59,6 +59,8 @@ export interface AnnotateResponse {
   annotations: ChartAnnotation[];
 }
 
+export type VerificationMode = 'stable' | 'full';
+
 interface HistoryEntry {
   role: string;
   parts: { text: string }[];
@@ -397,8 +399,9 @@ const pipelineHealth: PipelineHealth = {
 };
 
 // The Orchestrator decides how to run the pipeline based on current health
-function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDecision {
+function orchestratorDecide(lensIndex: number, totalLenses: number, verificationMode: VerificationMode = 'stable'): PipelineDecision {
   const now = Date.now();
+  const runFullVerification = verificationMode === 'full';
 
   // If API is down, skip optional stages
   if (pipelineHealth.apiStatus === 'down') {
@@ -417,11 +420,11 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     const waitTime = pipelineHealth.rateLimitReset - now + 500;
     return {
       shouldRunValidator: true,
-      shouldRunVerifier: true,
+      shouldRunVerifier: runFullVerification,
       shouldRunKnowledgeSearch: false, // Skip to save quota
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: waitTime,
-      reason: `Rate limit nearly exhausted (${pipelineHealth.rateLimitRemaining} remaining). Waiting ${waitTime}ms. Skipping knowledge search to save quota.`
+      reason: `Rate limit nearly exhausted (${pipelineHealth.rateLimitRemaining} remaining). Waiting ${waitTime}ms. Skipping knowledge search to save quota. ${runFullVerification ? 'Full verification enabled.' : 'Stable Live Vision mode skips specialist verifier.'}`
     };
   }
 
@@ -429,11 +432,11 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   if (pipelineHealth.apiStatus === 'degraded' || pipelineHealth.consecutiveFailures >= 2) {
     return {
       shouldRunValidator: pipelineHealth.consecutiveFailures < 3,
-      shouldRunVerifier: pipelineHealth.consecutiveFailures < 2,
+      shouldRunVerifier: runFullVerification && pipelineHealth.consecutiveFailures < 2,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: 3000,
-      reason: `API degraded (${pipelineHealth.consecutiveFailures} consecutive failures). Running conservatively.`
+      reason: `API degraded (${pipelineHealth.consecutiveFailures} consecutive failures). Running conservatively. ${runFullVerification ? 'Full verification enabled.' : 'Stable Live Vision mode skips specialist verifier.'}`
     };
   }
 
@@ -446,11 +449,11 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
 
   return {
     shouldRunValidator: true,
-    shouldRunVerifier: true,
+    shouldRunVerifier: runFullVerification,
     shouldRunKnowledgeSearch: true,
     shouldFetchMarketData: true,
     delayBeforeNextCallMs: Math.max(5000, Math.min(optimalDelay, 8000)),
-    reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${Math.max(5000, Math.min(optimalDelay, 8000))}ms.`
+    reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${Math.max(5000, Math.min(optimalDelay, 8000))}ms. ${runFullVerification ? 'Full verification enabled.' : 'Stable Live Vision mode skips specialist verifier.'}`
   };
 }
 
@@ -1363,7 +1366,7 @@ export const geminiService = {
     }
   },
 
-  async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc']): Promise<AnnotateResponse> {
+  async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc'], verificationMode: VerificationMode = 'stable'): Promise<AnnotateResponse> {
     try {
       // Build lens-specific system prompts — each lens is INDEPENDENT
       const lensPrompts: Record<string, { system: string; annotation: string }> = {
@@ -1950,7 +1953,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         if (!lensConfig) continue;
 
         // ===== ORCHESTRATOR: Get pipeline decision for this lens =====
-        const decision = orchestratorDecide(lensIdx, lenses.length);
+        const decision = orchestratorDecide(lensIdx, lenses.length, verificationMode);
         console.log(`[Orchestrator] Lens "${lens}" (${lensIdx + 1}/${lenses.length}): ${decision.reason}`);
 
         // Apply orchestrator-recommended delay between lenses
