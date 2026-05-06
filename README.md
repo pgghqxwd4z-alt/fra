@@ -29,17 +29,6 @@ temporarily unavailable. Then build the frontend with:
 VITE_GROQ_PROXY_URL=https://your-proxy.example.com
 ```
 
-Optional Groq-only reliability controls:
-
-```env
-VITE_GROQ_MIN_SPACING_MS=2500
-VITE_GROQ_CACHE_TTL_MS=600000
-VITE_CHART_ANALYSIS_CACHE_TTL_MS=600000
-```
-
-These slow bursty lens-stage requests and reuse repeated chart/lens results to
-reduce Groq rate-limit pressure without adding another live AI provider.
-
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh

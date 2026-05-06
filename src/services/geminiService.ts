@@ -77,95 +77,6 @@ interface GroqContentPart {
   };
 }
 
-interface GroqRequestBody {
-  model: string;
-  messages: GroqMessage[];
-  temperature: number;
-  max_tokens: number;
-}
-
-interface GroqCacheEntry {
-  text: string;
-  expiresAt: number;
-}
-
-interface ChartAnalysisCacheEntry {
-  response: AnnotateResponse;
-  expiresAt: number;
-}
-
-const GROQ_QUEUE_MIN_SPACING_MS = readPositiveEnvNumber('VITE_GROQ_MIN_SPACING_MS', 2500);
-const GROQ_CACHE_TTL_MS = readPositiveEnvNumber('VITE_GROQ_CACHE_TTL_MS', 10 * 60 * 1000);
-const CHART_ANALYSIS_CACHE_TTL_MS = readPositiveEnvNumber('VITE_CHART_ANALYSIS_CACHE_TTL_MS', 10 * 60 * 1000);
-const MAX_GROQ_CACHE_ENTRIES = 30;
-const MAX_CHART_ANALYSIS_CACHE_ENTRIES = 12;
-
-let groqQueue: Promise<void> = Promise.resolve();
-let nextGroqRequestAt = 0;
-
-const groqResponseCache = new Map<string, GroqCacheEntry>();
-const chartAnalysisCache = new Map<string, ChartAnalysisCacheEntry>();
-
-function readPositiveEnvNumber(name: string, fallback: number): number {
-  const raw = import.meta.env[name]?.trim();
-  if (!raw) return fallback;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function hashString(input: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-function isCacheableGroqStage(stage: string): boolean {
-  return stage !== 'chat-advisor' && stage !== 'healthcheck';
-}
-
-function buildGroqCacheKey(body: GroqRequestBody, stage: string): string {
-  return `${stage}:${hashString(JSON.stringify(body))}`;
-}
-
-function trimCache<T>(cache: Map<string, T>, maxEntries: number): void {
-  while (cache.size > maxEntries) {
-    const firstKey = cache.keys().next().value;
-    if (!firstKey) break;
-    cache.delete(firstKey);
-  }
-}
-
-async function enqueueGroqRequest<T>(stage: string, task: () => Promise<T>): Promise<T> {
-  const run = async (): Promise<T> => {
-    const waitMs = Math.max(0, nextGroqRequestAt - Date.now());
-    if (waitMs > 0) {
-      console.log(`[Groq Queue] Waiting ${waitMs}ms before ${stage}.`);
-      await sleep(waitMs);
-    }
-    nextGroqRequestAt = Date.now() + GROQ_QUEUE_MIN_SPACING_MS;
-    return task();
-  };
-
-  const queued = groqQueue.then(run, run);
-  groqQueue = queued.then(() => undefined, () => undefined);
-  return queued;
-}
-
-function cloneAnnotateResponse(response: AnnotateResponse): AnnotateResponse {
-  return {
-    image: response.image,
-    analysis: response.analysis,
-    annotations: response.annotations.map(annotation => ({ ...annotation })),
-  };
-}
-
 // ===== External Data Search Functions =====
 interface MarketDataContext {
   symbol: string;
@@ -463,7 +374,6 @@ interface PipelineDecision {
   shouldRunKnowledgeSearch: boolean;
   shouldFetchMarketData: boolean;
   delayBeforeNextCallMs: number;
-  delayBetweenStagesMs: number;
   reason: string;
 }
 
@@ -498,7 +408,6 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: false,
       delayBeforeNextCallMs: 5000,
-      delayBetweenStagesMs: 6000,
       reason: 'API is down — running primary analysis only with extended delay'
     };
   }
@@ -512,7 +421,6 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
       shouldRunKnowledgeSearch: false, // Skip to save quota
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: waitTime,
-      delayBetweenStagesMs: 5000,
       reason: `Rate limit nearly exhausted (${pipelineHealth.rateLimitRemaining} remaining). Waiting ${waitTime}ms. Skipping knowledge search to save quota.`
     };
   }
@@ -525,7 +433,6 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: 3000,
-      delayBetweenStagesMs: 3500,
       reason: `API degraded (${pipelineHealth.consecutiveFailures} consecutive failures). Running conservatively.`
     };
   }
@@ -543,7 +450,6 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     shouldRunKnowledgeSearch: true,
     shouldFetchMarketData: true,
     delayBeforeNextCallMs: Math.max(5000, Math.min(optimalDelay, 8000)),
-    delayBetweenStagesMs: 2500,
     reason: `Healthy — ${pipelineHealth.rateLimitRemaining} calls remaining. ${callsRemainingForLenses} calls needed. Delay: ${Math.max(5000, Math.min(optimalDelay, 8000))}ms.`
   };
 }
@@ -565,12 +471,7 @@ function orchestratorRecordCall(stage: string, durationMs: number, success: bool
     pipelineHealth.rateLimitRemaining = parseInt(rateLimitHeaders.remaining) || 30;
   }
   if (rateLimitHeaders?.reset) {
-    const resetValue = Number(rateLimitHeaders.reset);
-    if (Number.isFinite(resetValue)) {
-      pipelineHealth.rateLimitReset = resetValue > 10_000_000_000
-        ? resetValue
-        : resetValue * 1000;
-    }
+    pipelineHealth.rateLimitReset = parseInt(rateLimitHeaders.reset) * 1000;
   }
 
   // Update API status based on recent health
@@ -644,38 +545,25 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = 8192): Promise<string> {
   const headers = getGroqHeaders();
   let rateLimitExhausted = false;
-  const requestBody: GroqRequestBody = {
-    model,
-    messages,
-    temperature: 0.7,
-    max_tokens: maxTokens,
-  };
-  const cacheKey = buildGroqCacheKey(requestBody, stage);
-  const cached = groqResponseCache.get(cacheKey);
-
-  if (cached && cached.expiresAt > Date.now() && isCacheableGroqStage(stage)) {
-    console.log(`[Groq Cache] Reusing cached response for ${stage}.`);
-    return cached.text;
-  }
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
-    let failureRecorded = false;
     try {
-      const response = await enqueueGroqRequest(stage, async () => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 90000);
-        try {
-          return await fetch(GROQ_API_URL, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(requestBody),
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
+      // Add 90-second timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
+      const response = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.7,
+          max_tokens: maxTokens,
+        }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       // Extract rate limit headers for orchestrator
       const rateLimitHeaders = {
@@ -686,20 +574,17 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        failureRecorded = true;
         rateLimitExhausted = true;
         // Rate limited — wait and retry with exponential backoff
         const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
-        const backoff = retryAfter || Math.min(10000 * Math.pow(2, attempt), 60000);
-        nextGroqRequestAt = Math.max(nextGroqRequestAt, Date.now() + backoff);
+        const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
-        await sleep(backoff);
+        await new Promise(resolve => setTimeout(resolve, backoff));
         continue;
       }
 
       if (!response.ok) {
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        failureRecorded = true;
         const error = await response.json();
         throw new Error(error.error?.message || `Groq API error: ${response.status}`);
       }
@@ -709,23 +594,15 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       console.log(`[Orchestrator] ${stage} completed in ${duration}ms. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
 
       const data = await response.json();
-      const text = data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
-      if (isCacheableGroqStage(stage)) {
-        groqResponseCache.set(cacheKey, { text, expiresAt: Date.now() + GROQ_CACHE_TTL_MS });
-        trimCache(groqResponseCache, MAX_GROQ_CACHE_ENTRIES);
-      }
-      return text;
+      return data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
     } catch (err) {
-      if (!failureRecorded) {
-        orchestratorRecordCall(stage, Date.now() - start, false);
-      }
+      orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
       // Network error — wait and retry with longer backoff
       const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
       const errMsg = err instanceof Error ? err.message : String(err);
       console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}. Retrying in ${backoff}ms...`);
-      nextGroqRequestAt = Math.max(nextGroqRequestAt, Date.now() + backoff);
-      await sleep(backoff);
+      await new Promise(resolve => setTimeout(resolve, backoff));
     }
   }
   if (rateLimitExhausted) {
@@ -1488,19 +1365,6 @@ export const geminiService = {
 
   async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc']): Promise<AnnotateResponse> {
     try {
-      const sortedLenses = [...lenses].sort();
-      const analysisCacheKey = hashString(JSON.stringify({
-        image: hashString(base64Image),
-        prompt: prompt.trim(),
-        lenses: sortedLenses,
-      }));
-      const cachedAnalysis = chartAnalysisCache.get(analysisCacheKey);
-
-      if (cachedAnalysis && cachedAnalysis.expiresAt > Date.now()) {
-        console.log('[Groq Cache] Reusing cached chart analysis.');
-        return cloneAnnotateResponse(cachedAnalysis.response);
-      }
-
       // Build lens-specific system prompts — each lens is INDEPENDENT
       const lensPrompts: Record<string, { system: string; annotation: string }> = {
         smc: {
@@ -2092,7 +1956,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         // Apply orchestrator-recommended delay between lenses
         if (lensIdx > 0 && decision.delayBeforeNextCallMs > 0) {
           console.log(`[Orchestrator] Waiting ${decision.delayBeforeNextCallMs}ms before next lens...`);
-          await sleep(decision.delayBeforeNextCallMs);
+          await new Promise(resolve => setTimeout(resolve, decision.delayBeforeNextCallMs));
         }
 
         // Wrap entire lens pipeline in try/catch so one lens failure doesn't crash the whole analysis
@@ -2171,7 +2035,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`, 768);
+                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -2187,9 +2051,9 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
             const externalDataSection = buildMarketDataSection(marketData);
 
             // Orchestrator-managed delay before validator call
-            const validatorDelay = Math.max(decision.delayBetweenStagesMs, 1500);
+            const validatorDelay = Math.max(decision.delayBeforeNextCallMs, 1500);
             console.log(`[Orchestrator] Waiting ${validatorDelay}ms before validator call for "${lens}"...`);
-            await sleep(validatorDelay);
+            await new Promise(resolve => setTimeout(resolve, validatorDelay));
 
             const validatorMessages: GroqMessage[] = [
               {
@@ -2269,9 +2133,9 @@ IMPORTANT:
             const searchQuery = buildLensResearchQuery(lens, symbol, prompt);
             verificationWebEvidence = await fetchWebSearchResults(searchQuery);
 
-            const verifierDelay = Math.max(decision.delayBetweenStagesMs, 2000);
+            const verifierDelay = Math.max(2000, Math.floor(decision.delayBeforeNextCallMs / 2));
             console.log(`[Orchestrator] Waiting ${verifierDelay}ms before specialist verifier call for "${lens}"...`);
-            await sleep(verifierDelay);
+            await new Promise(resolve => setTimeout(resolve, verifierDelay));
 
             const verifierMessages: GroqMessage[] = [
               {
@@ -2358,9 +2222,9 @@ IMPORTANT:
 
           if (pipelineHealth.apiStatus !== 'down') {
             try {
-              const guardDelay = Math.max(decision.delayBetweenStagesMs, 1500);
+              const guardDelay = Math.max(1500, Math.floor(decision.delayBeforeNextCallMs / 3));
               console.log(`[Orchestrator] Waiting ${guardDelay}ms before annotation guard call for "${lens}"...`);
-              await sleep(guardDelay);
+              await new Promise(resolve => setTimeout(resolve, guardDelay));
 
               const guardMessages: GroqMessage[] = [
                 {
@@ -2461,7 +2325,7 @@ IMPORTANT:
           if (!isRateLimit) {
             try {
               console.log(`[Orchestrator] Fallback API for "${lens}": Using fast llama-3.1-8b-instant (text-only)...`);
-              await sleep(Math.max(5000, decision.delayBetweenStagesMs));
+              await new Promise(resolve => setTimeout(resolve, 5000)); // 5s cooldown to let API recover
 
               const fallbackMessages: GroqMessage[] = [
                 {
@@ -2541,7 +2405,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
       if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus === 'healthy') {
         try {
           console.log(`[Orchestrator] Stage 4: Probabilistic Entry Analysis — synthesizing ${allAnalysisParts.length} lens outputs...`);
-          await sleep(5000);
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Cooldown before synthesis
 
           const synthesisMessages: GroqMessage[] = [
             {
@@ -2662,7 +2526,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry', 3072);
+          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {
@@ -2700,15 +2564,8 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
 
       // Combine all independent analyses with clear separators
       const combinedAnalysis = allAnalysisParts.join('\n\n---\n\n');
-      const response = { image: null, analysis: combinedAnalysis, annotations: allAnnotations };
 
-      chartAnalysisCache.set(analysisCacheKey, {
-        response: cloneAnnotateResponse(response),
-        expiresAt: Date.now() + CHART_ANALYSIS_CACHE_TTL_MS,
-      });
-      trimCache(chartAnalysisCache, MAX_CHART_ANALYSIS_CACHE_ENTRIES);
-
-      return response;
+      return { image: null, analysis: combinedAnalysis, annotations: allAnnotations };
     } catch (error) {
       console.error("Annotation Error:", error);
       throw error;
