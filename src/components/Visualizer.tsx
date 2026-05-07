@@ -3,14 +3,6 @@ import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiServic
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
-function cleanAnalysisForDisplay(text: string): string {
-  const unavailablePhrase = ['the live vision model', 'is temporarily unavailable'].join(' ');
-
-  return text
-    .replace(new RegExp(unavailablePhrase, 'gi'), 'Groq capacity is busy')
-    .replace(/Retry for full AI chart-specific verification/gi, 'Retry later for full AI chart-specific verification');
-}
-
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
     <div className="absolute inset-0 bg-emerald-500/5 rounded-lg border border-white/5 rotate-45 group-hover/icon:rotate-90 group-hover/icon:bg-emerald-500/10 transition-all duration-700"></div>
@@ -177,7 +169,7 @@ const Visualizer: React.FC = () => {
         setResultImage(result.image);
       }
       
-      setAnalysis(cleanAnalysisForDisplay(result.analysis));
+      setAnalysis(result.analysis);
       setShowOriginal(false);
     } catch (error) {
       console.error('[Annotation Engine]', error);
