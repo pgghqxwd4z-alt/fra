@@ -703,8 +703,8 @@ function isGroqRateLimitOrCapacityError(message: string): boolean {
 
 function getFrameworkFallbackReason(errorMessage: string): string {
   return isTemporaryGroqAvailabilityError(errorMessage)
-    ? 'Live AI verification is temporarily unavailable after repeated capacity checks.'
-    : 'Live AI verification is temporarily unavailable for this request.';
+    ? 'Groq capacity is busy after repeated checks.'
+    : 'Groq capacity is busy for this request.';
 }
 
 function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
@@ -714,7 +714,7 @@ function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessa
   if (lens === 'gs') {
     return `**GS Analysis — Framework Fallback**
 
-_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of a temporary failure. Retry for full AI chart-specific verification._
+_Groq capacity is busy, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of blocking the chart. Retry later for full AI chart-specific verification._
 
 ## Institutional Flow Checklist
 - Map the dominant impulse leg first, then identify the liquidity voids left by fast displacement.
@@ -737,7 +737,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
   if (lens === 'smc') {
     return `**SMC Analysis — Framework Fallback**
 
-_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic SMC framework instead of a temporary failure. Retry for full AI chart-specific verification._
+_Groq capacity is busy, so QuantSage is showing a deterministic SMC framework instead of blocking the chart. Retry later for full AI chart-specific verification._
 
 ## SMC Checklist
 - Validate bullish order blocks as the last down candle before bullish displacement.
@@ -754,7 +754,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
   if (lens === 'psych') {
     return `**PSYCH Analysis — Framework Fallback**
 
-_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic trading-psychology framework instead of a temporary failure. Retry for full AI chart-specific verification._
+_Groq capacity is busy, so QuantSage is showing a deterministic trading-psychology framework instead of blocking the chart. Retry later for full AI chart-specific verification._
 
 ## Psychology Checklist
 - Identify where retail traders are likely trapped after a late breakout or breakdown.
@@ -770,7 +770,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
   if (lens === 'ppa') {
     return `**PPA Analysis — Framework Fallback**
 
-_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic price-action framework instead of a temporary failure. Retry for full AI chart-specific verification._
+_Groq capacity is busy, so QuantSage is showing a deterministic price-action framework instead of blocking the chart. Retry later for full AI chart-specific verification._
 
 ## Price Action Checklist
 - Mark support/resistance only at repeated reactions or clear role flips.
@@ -785,7 +785,7 @@ _The live vision model is temporarily unavailable, so QuantSage is showing a det
 
   return `**ISYN Analysis — Framework Fallback**
 
-_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic institutional-synthesis framework instead of a temporary failure. Retry for full AI chart-specific verification._
+_Groq capacity is busy, so QuantSage is showing a deterministic institutional-synthesis framework instead of blocking the chart. Retry later for full AI chart-specific verification._
 
 ## Four-Layer Checklist
 - Psychology: define risk and probabilistic expectation before trade direction.
