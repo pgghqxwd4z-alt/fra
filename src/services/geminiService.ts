@@ -1,6 +1,10 @@
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
 const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const PRIMARY_VISION_MAX_TOKENS = 1536;
+const VERIFICATION_MAX_TOKENS = 1024;
+const TEXT_STAGE_MAX_TOKENS = 768;
 
 function getGroqHeaders(): Record<string, string> {
   if (!GROQ_API_URL) {
@@ -533,7 +537,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = 8192): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = TEXT_STAGE_MAX_TOKENS): Promise<string> {
   const headers = getGroqHeaders();
   let rateLimitExhausted = false;
 
@@ -566,8 +570,20 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
         rateLimitExhausted = true;
-        // Rate limited — wait and retry with exponential backoff
+        const error = await response.json().catch(() => null);
+        const errorMessage = error?.error?.message || `Groq API error: ${response.status}`;
         const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
+        const normalizedError = errorMessage.toLowerCase();
+        const longCapacityWindow = retryAfter > 30000
+          || normalizedError.includes('tokens per day')
+          || normalizedError.includes('tpd')
+          || normalizedError.includes('daily')
+          || /try again in \d+m/i.test(errorMessage);
+
+        if (longCapacityWindow) {
+          throw new Error(`Groq capacity limit reached for stage "${stage}": ${errorMessage}`);
+        }
+
         const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
         await new Promise(resolve => setTimeout(resolve, backoff));
@@ -589,9 +605,11 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
     } catch (err) {
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
-      // Network error — wait and retry with longer backoff
-      const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (isGroqRateLimitOrCapacityError(errMsg) && errMsg.includes('capacity limit reached')) {
+        throw err;
+      }
+      const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
       console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}. Retrying in ${backoff}ms...`);
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
@@ -698,7 +716,12 @@ function isGroqRateLimitOrCapacityError(message: string): boolean {
     || normalized.includes('rate-limit')
     || normalized.includes('too many requests')
     || normalized.includes('quota')
-    || normalized.includes('capacity');
+    || normalized.includes('capacity')
+    || normalized.includes('request too large')
+    || normalized.includes('tokens per minute')
+    || normalized.includes('tokens per day')
+    || normalized.includes('tpm')
+    || normalized.includes('tpd');
 }
 
 function getFrameworkFallbackReason(errorMessage: string): string {
@@ -1929,13 +1952,13 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               },
               {
                 type: 'text',
-                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Be EXTREMELY specific with price levels. Never say "around" or "approximately" — give exact numbers.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
+                text: 'Analyze this chart with concise institutional precision.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Give the highest-value chart-specific read only.\n- Be specific with visible levels where possible.\n- Include probability percentages for the next likely move.\n- Keep the response compact so Groq live vision can complete reliably.\n\nRESPONSE FORMAT:\n1. Provide 5-8 concise bullets for the selected lens.\n2. Add a short AI PREDICTION ENGINE section with bias, invalidation, and 1-2 targets.\n3. Then provide one JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nReturn 3-5 high-confidence annotations only.'
               }
             ]
           }
         ];
 
-        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`, 4096);
+        const analysisText = await callGroq(messages, GROQ_VISION_MODEL, 2, `primary-${lens}`, PRIMARY_VISION_MAX_TOKENS);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
@@ -1984,7 +2007,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
+                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 1, `knowledge-${lens}`, TEXT_STAGE_MAX_TOKENS);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -2053,7 +2076,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`, 4096);
+            const validatedText = await callGroq(validatorMessages, GROQ_VISION_MODEL, 1, `validator-${lens}`, VERIFICATION_MAX_TOKENS);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -2137,7 +2160,7 @@ IMPORTANT:
               }
             ];
 
-            const verifierText = await callGroq(verifierMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 2, `verifier-${lens}`, 4096);
+            const verifierText = await callGroq(verifierMessages, GROQ_VISION_MODEL, 1, `verifier-${lens}`, VERIFICATION_MAX_TOKENS);
             const verifierResult = parseVerifiedAnnotations(verifierText, lens);
             const verifierAnnotations = verifierResult.annotations;
 
@@ -2209,7 +2232,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 2, `fallback-${lens}`, 2048);
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 1, `fallback-${lens}`, TEXT_STAGE_MAX_TOKENS);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -2374,7 +2397,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
+          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 1, 'synthesis-entry', TEXT_STAGE_MAX_TOKENS);
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {
