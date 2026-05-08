@@ -12,6 +12,32 @@ interface LiveQuote {
   timestamp: number;
 }
 
+interface Mt5AccountStatus {
+  connected: boolean;
+  dryRun: boolean;
+  server: string | null;
+  account: string | null;
+  killSwitchEnabled: boolean;
+  maxRiskPercent: number;
+  maxLotSize: number;
+}
+
+interface Mt5OrderResponse {
+  accepted: boolean;
+  status: 'dry_run' | 'submitted';
+  ticketId: string;
+  message: string;
+}
+
+type Mt5MessageTone = 'info' | 'success' | 'error';
+
+interface Mt5Message {
+  tone: Mt5MessageTone;
+  text: string;
+}
+
+const MT5_BRIDGE_URL = import.meta.env.VITE_MT5_BRIDGE_URL || '';
+
 const COINGECKO_IDS: Record<string, string> = {
   BTC: 'bitcoin',
   ETH: 'ethereum',
@@ -147,6 +173,16 @@ const RobotTrader: React.FC = () => {
   const [quote, setQuote] = useState<LiveQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [lastVerified, setLastVerified] = useState<number | null>(null);
+  const [mt5Account, setMt5Account] = useState<Mt5AccountStatus | null>(null);
+  const [mt5Message, setMt5Message] = useState<Mt5Message>({
+    tone: 'info',
+    text: MT5_BRIDGE_URL
+      ? 'MT5 bridge configured. Connect status will refresh automatically.'
+      : 'Set VITE_MT5_BRIDGE_URL to connect the supervised MT5 bridge.'
+  });
+  const [manualApproval, setManualApproval] = useState(false);
+  const [killSwitch, setKillSwitch] = useState(false);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
 
   const applySymbol = () => {
     const normalized = draftSymbol.replace(/[^a-z0-9]/gi, '').toUpperCase();
@@ -191,6 +227,17 @@ const RobotTrader: React.FC = () => {
   }, [symbol]);
 
   const plan = useMemo(() => buildCorrectedPlan({ ...ROBOT_TRADE_PLAN, symbol }, quote), [quote, symbol]);
+  const unitRisk = Math.abs(plan.entry - plan.stopLoss);
+  const mt5Direction = plan.direction === 'SHORT' ? 'SELL' : 'BUY';
+  const proposedLotSize = mt5Account
+    ? Math.min(0.01, mt5Account.maxLotSize)
+    : 0.01;
+  const executionBlocked = !quote
+    || !MT5_BRIDGE_URL
+    || plan.direction === 'WAIT'
+    || mode !== 'Armed'
+    || killSwitch
+    || !manualApproval;
 
   useEffect(() => {
     if (mode === 'Paused') return;
@@ -203,7 +250,93 @@ const RobotTrader: React.FC = () => {
     if (nextMode !== mode) setMode(nextMode);
   }, [mode, plan.confidence, plan.verificationStatus, quote]);
 
-  const unitRisk = Math.abs(plan.entry - plan.stopLoss);
+  useEffect(() => {
+    if (!MT5_BRIDGE_URL) return;
+    let cancelled = false;
+
+    const loadAccount = async () => {
+      try {
+        const response = await fetch(`${MT5_BRIDGE_URL}/account`);
+        if (!response.ok) throw new Error('MT5 bridge unavailable');
+        const account = await response.json() as Mt5AccountStatus;
+        if (!cancelled) {
+          setMt5Account(account);
+          setKillSwitch(account.killSwitchEnabled);
+          setMt5Message({
+            tone: account.connected ? 'success' : 'info',
+            text: account.connected
+              ? `Connected to MT5 account ${account.account || 'unknown'} on ${account.server || 'configured server'}.`
+              : account.dryRun
+                ? 'MT5 bridge is in dry-run mode. Orders validate but are not sent to a broker.'
+                : 'MT5 bridge is reachable but not connected. Check saved credentials and terminal status.'
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setMt5Message({
+            tone: 'error',
+            text: 'MT5 bridge is unreachable. Start mt5-bridge before sending supervised tickets.'
+          });
+        }
+      }
+    };
+
+    loadAccount();
+    const interval = window.setInterval(loadAccount, 30000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const submitMt5Order = async () => {
+    if (!MT5_BRIDGE_URL) {
+      setMt5Message({ tone: 'error', text: 'Set VITE_MT5_BRIDGE_URL before submitting MT5 tickets.' });
+      return;
+    }
+    if (executionBlocked) {
+      setMt5Message({
+        tone: 'error',
+        text: 'Order blocked: live quote, Armed mode, manual approval, and kill switch off are required.'
+      });
+      return;
+    }
+
+    setOrderSubmitting(true);
+    try {
+      const response = await fetch(`${MT5_BRIDGE_URL}/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: plan.symbol,
+          direction: mt5Direction,
+          volume: proposedLotSize,
+          entry: plan.entry,
+          stopLoss: plan.stopLoss,
+          takeProfit: plan.takeProfit,
+          riskPercent: plan.maxRiskPercent,
+          manualApproval,
+          comment: 'QuantSage supervised MT5 order'
+        })
+      });
+      const data = await response.json() as Mt5OrderResponse | { detail?: string };
+      if (!response.ok) {
+        throw new Error('detail' in data && data.detail ? data.detail : 'MT5 order rejected');
+      }
+      const order = data as Mt5OrderResponse;
+      setMt5Message({
+        tone: order.status === 'submitted' ? 'success' : 'info',
+        text: `${order.message} Ticket: ${order.ticketId}.`
+      });
+      setManualApproval(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'MT5 order submission failed.';
+      setMt5Message({ tone: 'error', text: message });
+    } finally {
+      setOrderSubmitting(false);
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto custom-scrollbar space-y-6 pb-8">
@@ -312,6 +445,101 @@ const RobotTrader: React.FC = () => {
         {plan.methods.map(method => (
           <MethodCard key={method.method} method={method} />
         ))}
+      </div>
+
+      <div className="glass-panel rounded-[2rem] p-6 border-emerald-500/10">
+        <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6 mb-6">
+          <div>
+            <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Supervised MT5 Live Execution</p>
+            <h3 className="text-2xl font-bold text-white mb-2">Manual Approval Order Ticket</h3>
+            <p className="text-slate-500 max-w-3xl leading-relaxed">
+              The robot can prepare live MT5 orders, but every ticket requires explicit approval, hard risk caps,
+              stop loss, take profit, and a kill switch before anything can reach a broker.
+            </p>
+          </div>
+          <div className={`px-4 py-2 rounded-full border text-[10px] font-bold uppercase tracking-widest ${
+            killSwitch
+              ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              : mt5Account?.connected
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+          }`}>
+            {killSwitch ? 'Kill Switch On' : mt5Account?.connected ? 'MT5 Connected' : mt5Account?.dryRun ? 'Dry Run' : 'Bridge Pending'}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-6">
+          <TradeLevel label="MT5 Direction" value={mt5Direction} />
+          <TradeLevel label="Lot Size" value={proposedLotSize.toFixed(2)} />
+          <TradeLevel label="Risk Cap" value={`${plan.maxRiskPercent.toFixed(2)}%`} tone="risk" />
+          <TradeLevel label="Bridge Max Lot" value={(mt5Account?.maxLotSize || 0.1).toFixed(2)} />
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
+          <label className={`rounded-2xl border p-4 cursor-pointer transition-all ${
+            manualApproval
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+              : 'bg-black/25 border-white/5 text-slate-400'
+          }`}>
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={manualApproval}
+                onChange={(event) => setManualApproval(event.target.checked)}
+                className="mt-1"
+              />
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest mb-1">Manual approval</p>
+                <p className="text-sm leading-relaxed">I approve this exact symbol, direction, entry, stop, target, lot size, and risk cap.</p>
+              </div>
+            </div>
+          </label>
+
+          <label className={`rounded-2xl border p-4 cursor-pointer transition-all ${
+            killSwitch
+              ? 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+              : 'bg-black/25 border-white/5 text-slate-400'
+          }`}>
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={killSwitch}
+                onChange={(event) => setKillSwitch(event.target.checked)}
+                className="mt-1"
+              />
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest mb-1">Kill switch</p>
+                <p className="text-sm leading-relaxed">When enabled, all live order submission is blocked from the Robot Trader desk.</p>
+              </div>
+            </div>
+          </label>
+
+          <div className="rounded-2xl border border-white/5 bg-black/25 p-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-white/40 mb-2">Bridge status</p>
+            <p className={`text-sm leading-relaxed ${
+              mt5Message.tone === 'success' ? 'text-emerald-300' : mt5Message.tone === 'error' ? 'text-rose-300' : 'text-amber-300'
+            }`}>
+              {mt5Message.text}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
+            Required: live quote, Armed mode, manual approval, kill switch off, MT5 bridge configured.
+          </div>
+          <button
+            onClick={submitMt5Order}
+            disabled={orderSubmitting || executionBlocked}
+            className={`px-6 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all ${
+              orderSubmitting || executionBlocked
+                ? 'bg-slate-800/70 text-slate-500 cursor-not-allowed'
+                : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+            }`}
+          >
+            {orderSubmitting ? 'Submitting Ticket' : executionBlocked ? 'Execution Blocked' : 'Approve & Send MT5 Ticket'}
+          </button>
+        </div>
       </div>
     </div>
   );
