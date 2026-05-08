@@ -1,4 +1,4 @@
-import { TradingStrategy, BookInsight, FrameworkStep } from './types';
+import { TradingStrategy, BookInsight, FrameworkStep, RobotTradePlan } from './types';
 
 export const TRADING_STRATEGIES: TradingStrategy[] = [
   {
@@ -77,3 +77,48 @@ export const FRAMEWORK_STEPS: FrameworkStep[] = [
     details: ["LTF Confirmation", "CHoCH/BOS", "Candlestick Triggers"]
   }
 ];
+
+export const ROBOT_TRADE_PLAN: RobotTradePlan = {
+  symbol: 'BTCUSDT',
+  direction: 'WAIT',
+  entry: 63420,
+  stopLoss: 62180,
+  takeProfit: 65900,
+  riskReward: 2,
+  confidence: 72,
+  maxRiskPercent: 0.75,
+  verificationStatus: 'Needs Review',
+  correctionAction: 'Do not enter until live price reclaims the institutional buy zone and confirms a higher low.',
+  methods: [
+    {
+      method: 'Market Wizards Risk Gate',
+      status: 'Aligned',
+      score: 86,
+      note: 'Trade is sized defensively with pre-defined loss and asymmetric reward.'
+    },
+    {
+      method: 'Douglas Discipline Filter',
+      status: 'Warning',
+      score: 68,
+      note: 'Robot blocks revenge entries after two consecutive invalidations.'
+    },
+    {
+      method: 'Goldman-Style Flow Check',
+      status: 'Warning',
+      score: 64,
+      note: 'Macro and liquidity context must agree before the execution engine is armed.'
+    },
+    {
+      method: 'SMC Structure Scan',
+      status: 'Aligned',
+      score: 78,
+      note: 'Entry waits for liquidity sweep, market structure shift, and FVG retest.'
+    },
+    {
+      method: 'Pure Price Action Trigger',
+      status: 'Blocked',
+      score: 42,
+      note: 'No trade while candles close inside the rejection range without momentum.'
+    }
+  ]
+};

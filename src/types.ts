@@ -1,6 +1,7 @@
 export enum AnalysisTab {
   CHAT = 'Chat',
   VISUALIZER = 'Visualizer',
+  ROBOT_TRADER = 'Robot Trader',
   STRATEGIES = 'Strategies',
   WISDOM = 'Wisdom',
   FRAMEWORK = 'Framework'
@@ -44,4 +45,25 @@ export interface FrameworkStep {
   source: string;
   description: string;
   details: string[];
+}
+
+export interface RobotMethodSignal {
+  method: string;
+  status: 'Aligned' | 'Warning' | 'Blocked';
+  score: number;
+  note: string;
+}
+
+export interface RobotTradePlan {
+  symbol: string;
+  direction: 'LONG' | 'SHORT' | 'WAIT';
+  entry: number;
+  stopLoss: number;
+  takeProfit: number;
+  riskReward: number;
+  confidence: number;
+  maxRiskPercent: number;
+  verificationStatus: 'Verified' | 'Needs Review' | 'Data Stale';
+  correctionAction: string;
+  methods: RobotMethodSignal[];
 }
