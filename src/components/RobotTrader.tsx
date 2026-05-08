@@ -29,6 +29,12 @@ interface Mt5OrderResponse {
   message: string;
 }
 
+interface Mt5CredentialDraft {
+  login: string;
+  server: string;
+  password: string;
+}
+
 type Mt5MessageTone = 'info' | 'success' | 'error';
 
 interface Mt5Message {
@@ -183,6 +189,12 @@ const RobotTrader: React.FC = () => {
   const [manualApproval, setManualApproval] = useState(false);
   const [killSwitch, setKillSwitch] = useState(false);
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
+  const [mt5Credentials, setMt5Credentials] = useState<Mt5CredentialDraft>({
+    login: '',
+    server: 'Deriv-Demo',
+    password: ''
+  });
 
   const applySymbol = () => {
     const normalized = draftSymbol.replace(/[^a-z0-9]/gi, '').toUpperCase();
@@ -232,12 +244,18 @@ const RobotTrader: React.FC = () => {
   const proposedLotSize = mt5Account
     ? Math.min(0.01, mt5Account.maxLotSize)
     : 0.01;
+  const credentialsReady = Boolean(
+    mt5Credentials.login.trim()
+    && mt5Credentials.server.trim()
+    && mt5Credentials.password
+  );
   const executionBlocked = !quote
     || !MT5_BRIDGE_URL
     || plan.direction === 'WAIT'
     || mode !== 'Armed'
     || killSwitch
-    || !manualApproval;
+    || !manualApproval
+    || (liveMode && !credentialsReady);
 
   useEffect(() => {
     if (mode === 'Paused') return;
@@ -298,7 +316,7 @@ const RobotTrader: React.FC = () => {
     if (executionBlocked) {
       setMt5Message({
         tone: 'error',
-        text: 'Order blocked: live quote, Armed mode, manual approval, and kill switch off are required.'
+        text: 'Order blocked: live quote, Armed mode, manual approval, kill switch off, and Deriv credentials for live mode are required.'
       });
       return;
     }
@@ -317,6 +335,15 @@ const RobotTrader: React.FC = () => {
           takeProfit: plan.takeProfit,
           riskPercent: plan.maxRiskPercent,
           manualApproval,
+          broker: 'Deriv',
+          liveMode,
+          mt5Credentials: liveMode
+            ? {
+              login: mt5Credentials.login.trim(),
+              server: mt5Credentials.server.trim(),
+              password: mt5Credentials.password
+            }
+            : undefined,
           comment: 'QuantSage supervised MT5 order'
         })
       });
@@ -330,6 +357,9 @@ const RobotTrader: React.FC = () => {
         text: `${order.message} Ticket: ${order.ticketId}.`
       });
       setManualApproval(false);
+      if (order.status === 'submitted') {
+        setMt5Credentials(current => ({ ...current, password: '' }));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'MT5 order submission failed.';
       setMt5Message({ tone: 'error', text: message });
@@ -460,11 +490,15 @@ const RobotTrader: React.FC = () => {
           <div className={`px-4 py-2 rounded-full border text-[10px] font-bold uppercase tracking-widest ${
             killSwitch
               ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              : liveMode && credentialsReady
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : liveMode
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
               : mt5Account?.connected
                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                 : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
           }`}>
-            {killSwitch ? 'Kill Switch On' : mt5Account?.connected ? 'MT5 Connected' : mt5Account?.dryRun ? 'Dry Run' : 'Bridge Pending'}
+            {killSwitch ? 'Kill Switch On' : liveMode ? credentialsReady ? 'Deriv Live Ready' : 'Deriv Login Needed' : mt5Account?.connected ? 'MT5 Connected' : mt5Account?.dryRun ? 'Dry Run' : 'Bridge Pending'}
           </div>
         </div>
 
@@ -473,6 +507,64 @@ const RobotTrader: React.FC = () => {
           <TradeLevel label="Lot Size" value={proposedLotSize.toFixed(2)} />
           <TradeLevel label="Risk Cap" value={`${plan.maxRiskPercent.toFixed(2)}%`} tone="risk" />
           <TradeLevel label="Bridge Max Lot" value={(mt5Account?.maxLotSize || 0.1).toFixed(2)} />
+        </div>
+
+        <div className="rounded-3xl border border-white/5 bg-black/25 p-5 mb-5">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 mb-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-white/40 mb-2">Deriv MT5 account details</p>
+              <p className="text-sm text-slate-500 leading-relaxed">
+                Enter your Deriv MT5 login, server, and password here when you want supervised live execution. These fields are sent only to the local MT5 bridge on submit.
+              </p>
+            </div>
+            <label className={`rounded-2xl border p-4 cursor-pointer transition-all min-w-[260px] ${
+              liveMode
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                : 'bg-black/25 border-white/5 text-slate-400'
+            }`}>
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={liveMode}
+                  onChange={(event) => setLiveMode(event.target.checked)}
+                  className="mt-1"
+                />
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest mb-1">Use Deriv live mode</p>
+                  <p className="text-sm leading-relaxed">Dry-run stays default. Live mode requires these credentials and manual approval.</p>
+                </div>
+              </div>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <input
+              value={mt5Credentials.login}
+              onChange={(event) => setMt5Credentials(current => ({ ...current, login: event.target.value.replace(/\D/g, '') }))}
+              placeholder="Deriv MT5 login"
+              inputMode="numeric"
+              autoComplete="username"
+              className="bg-slate-950/60 border border-white/10 rounded-2xl px-4 py-3 text-white font-mono text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+              aria-label="Deriv MT5 login"
+            />
+            <input
+              value={mt5Credentials.server}
+              onChange={(event) => setMt5Credentials(current => ({ ...current, server: event.target.value }))}
+              placeholder="Deriv-Server"
+              autoComplete="off"
+              className="bg-slate-950/60 border border-white/10 rounded-2xl px-4 py-3 text-white font-mono text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+              aria-label="Deriv MT5 server"
+            />
+            <input
+              value={mt5Credentials.password}
+              onChange={(event) => setMt5Credentials(current => ({ ...current, password: event.target.value }))}
+              placeholder="Deriv MT5 password"
+              type="password"
+              autoComplete="current-password"
+              className="bg-slate-950/60 border border-white/10 rounded-2xl px-4 py-3 text-white font-mono text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+              aria-label="Deriv MT5 password"
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
@@ -526,7 +618,7 @@ const RobotTrader: React.FC = () => {
 
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">
-            Required: live quote, Armed mode, manual approval, kill switch off, MT5 bridge configured.
+            Required: live quote, Armed mode, manual approval, kill switch off, MT5 bridge configured, Deriv credentials for live mode.
           </div>
           <button
             onClick={submitMt5Order}

@@ -29,6 +29,12 @@ class AccountStatus(BaseModel):
     maxLotSize: float
 
 
+class Mt5Credentials(BaseModel):
+    login: str = Field(min_length=1, max_length=32)
+    server: str = Field(min_length=3, max_length=80)
+    password: str = Field(min_length=1, max_length=120)
+
+
 class OrderTicket(BaseModel):
     symbol: str = Field(min_length=3, max_length=20)
     direction: Literal["BUY", "SELL"]
@@ -38,6 +44,9 @@ class OrderTicket(BaseModel):
     takeProfit: float = Field(gt=0)
     riskPercent: float = Field(gt=0)
     manualApproval: bool
+    broker: Literal["Deriv"] = "Deriv"
+    liveMode: bool = False
+    mt5Credentials: Mt5Credentials | None = None
     comment: str = Field(default="QuantSage supervised order", max_length=120)
 
 
@@ -74,6 +83,8 @@ def validate_order(ticket: OrderTicket) -> None:
         raise HTTPException(status_code=400, detail="Manual approval is required before live execution.")
     if ticket.symbol.upper() not in allowed_symbols():
         raise HTTPException(status_code=400, detail="Symbol is not in MT5_ALLOWED_SYMBOLS.")
+    if ticket.liveMode and ticket.mt5Credentials is None:
+        raise HTTPException(status_code=400, detail="Deriv MT5 credentials are required for live mode.")
     if ticket.riskPercent > float_env("MAX_RISK_PERCENT", 0.75):
         raise HTTPException(status_code=400, detail="Risk percent exceeds MAX_RISK_PERCENT.")
     if ticket.volume > float_env("MAX_LOT_SIZE", 0.1):
@@ -110,7 +121,7 @@ def account() -> AccountStatus:
 def create_order(ticket: OrderTicket) -> OrderResponse:
     validate_order(ticket)
 
-    if dry_run_enabled():
+    if dry_run_enabled() and not ticket.liveMode:
         return OrderResponse(
             accepted=True,
             status="dry_run",
@@ -123,13 +134,18 @@ def create_order(ticket: OrderTicket) -> OrderResponse:
     except ImportError as exc:
         raise HTTPException(status_code=503, detail="MetaTrader5 package is not installed on this host.") from exc
 
-    login = os.environ.get("MT5_ACCOUNT_LOGIN")
-    password = os.environ.get("MT5_PASSWORD")
-    server = os.environ.get("MT5_SERVER")
+    login = ticket.mt5Credentials.login if ticket.mt5Credentials else os.environ.get("MT5_ACCOUNT_LOGIN")
+    password = ticket.mt5Credentials.password if ticket.mt5Credentials else os.environ.get("MT5_PASSWORD")
+    server = ticket.mt5Credentials.server if ticket.mt5Credentials else os.environ.get("MT5_SERVER")
     if not login or not password or not server:
         raise HTTPException(status_code=503, detail="MT5 credentials are not configured.")
 
-    initialized = mt5.initialize(login=int(login), password=password, server=server)
+    try:
+        login_id = int(login)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="MT5 login must be numeric.") from exc
+
+    initialized = mt5.initialize(login=login_id, password=password, server=server)
     if not initialized:
         raise HTTPException(status_code=503, detail=f"MT5 initialize failed: {mt5.last_error()}")
 
@@ -158,5 +174,5 @@ def create_order(ticket: OrderTicket) -> OrderResponse:
         accepted=True,
         status="submitted",
         ticketId=str(result.order),
-        message="Order submitted to MT5 after manual approval.",
+        message=f"Order submitted to {ticket.broker} MT5 after manual approval.",
     )

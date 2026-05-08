@@ -6,6 +6,8 @@ This bridge is the server-side contract for connecting QuantSage Robot Trader to
 
 - Live orders require manual approval from the UI.
 - The bridge rejects requests unless `manualApproval` is `true`.
+- Deriv live mode is opt-in per order. By default, orders stay in dry-run validation.
+- The Robot Trader UI can collect Deriv MT5 login, server, and password at submit time; those values are not written to this repo.
 - A global kill switch can disable order submission immediately.
 - Risk caps are enforced before an order reaches MT5:
   - `MAX_RISK_PERCENT` defaults to `0.75`
@@ -25,6 +27,22 @@ MT5_ALLOWED_SYMBOLS=EURUSD,GBPUSD,XAUUSD,BTCUSD,BTCUSDT,ETHUSD,ETHUSDT
 ```
 
 `MT5_DRY_RUN=true` is the default and returns accepted order tickets without sending to a broker. Set `MT5_DRY_RUN=false` only when a real MT5 terminal/bridge is configured and supervised.
+
+For Deriv, the Robot Trader panel can also send credentials in a single approved order payload:
+
+```json
+{
+  "broker": "Deriv",
+  "liveMode": true,
+  "mt5Credentials": {
+    "login": "12345678",
+    "server": "Deriv-Demo",
+    "password": "your-password"
+  }
+}
+```
+
+`liveMode: true` bypasses dry-run for that approved ticket only. Keep it off until you have verified the bridge with a Deriv demo or low-balance account.
 
 ## Run locally
 
