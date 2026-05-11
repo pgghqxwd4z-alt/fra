@@ -86,6 +86,49 @@ interface MarketDataContext {
   recentCandles: { open: number; high: number; low: number; close: number; time: string }[];
   keyLevels: string;
   source: string;
+  derivativeContext?: string;
+  sentimentContext?: string;
+}
+
+interface BinanceTicker24h {
+  lastPrice?: string;
+  highPrice?: string;
+  lowPrice?: string;
+  volume?: string;
+  priceChangePercent?: string;
+}
+
+interface BinanceKline extends Array<string | number> {
+  0: number;
+  1: string;
+  2: string;
+  3: string;
+  4: string;
+}
+
+interface FearGreedResponse {
+  data?: {
+    value?: string;
+    value_classification?: string;
+    timestamp?: string;
+  }[];
+}
+
+interface CoinGeckoGlobalResponse {
+  data?: {
+    market_cap_change_percentage_24h_usd?: number;
+    market_cap_percentage?: Record<string, number>;
+  };
+}
+
+interface DerivativeDataContext {
+  source: string;
+  lines: string[];
+}
+
+interface SentimentDataContext {
+  source: string;
+  lines: string[];
 }
 
 async function extractSymbolFromAnalysis(analysisText: string): Promise<string> {
@@ -105,6 +148,146 @@ async function extractSymbolFromAnalysis(analysisText: string): Promise<string> 
   return '';
 }
 
+function parseNumericString(value: unknown): number | null {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(2)}%`;
+}
+
+function detectRecentTrend(candles: MarketDataContext['recentCandles']): string | null {
+  if (candles.length < 6) {
+    return null;
+  }
+
+  const firstClose = candles[0].close;
+  const lastClose = candles[candles.length - 1].close;
+  const change = ((lastClose - firstClose) / firstClose) * 100;
+  const recentHigh = Math.max(...candles.map(candle => candle.high));
+  const recentLow = Math.min(...candles.map(candle => candle.low));
+  const rangePosition = recentHigh !== recentLow
+    ? ((lastClose - recentLow) / (recentHigh - recentLow)) * 100
+    : 50;
+  const direction = change > 0.35 ? 'uptrend' : change < -0.35 ? 'downtrend' : 'range/chop';
+
+  return `Recent 10-candle trend: ${direction} (${formatPercent(change)}), close sits ${rangePosition.toFixed(0)}% through the recent high-low range.`;
+}
+
+async function fetchFearGreedContext(): Promise<SentimentDataContext | null> {
+  try {
+    const response = await fetch('https://api.alternative.me/fng/?limit=1&format=json').catch(() => null);
+    if (!response || !response.ok) {
+      return null;
+    }
+
+    const payload = await response.json() as FearGreedResponse;
+    const latest = payload.data?.[0];
+    if (!latest?.value || !latest.value_classification) {
+      return null;
+    }
+
+    return {
+      source: 'Alternative.me Crypto Fear & Greed Index',
+      lines: [
+        `Crypto Fear & Greed: ${latest.value}/100 (${latest.value_classification})`,
+      ],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchCoinGeckoGlobalContext(): Promise<SentimentDataContext | null> {
+  try {
+    const response = await fetch('https://api.coingecko.com/api/v3/global').catch(() => null);
+    if (!response || !response.ok) {
+      return null;
+    }
+
+    const payload = await response.json() as CoinGeckoGlobalResponse;
+    const marketChange = payload.data?.market_cap_change_percentage_24h_usd;
+    const btcDominance = payload.data?.market_cap_percentage?.btc;
+    const ethDominance = payload.data?.market_cap_percentage?.eth;
+    const lines = [
+      typeof marketChange === 'number' ? `Crypto total market-cap 24h change: ${formatPercent(marketChange)}` : '',
+      typeof btcDominance === 'number' ? `BTC dominance: ${btcDominance.toFixed(1)}%` : '',
+      typeof ethDominance === 'number' ? `ETH dominance: ${ethDominance.toFixed(1)}%` : '',
+    ].filter(Boolean);
+
+    return lines.length > 0
+      ? { source: 'CoinGecko Global Market Data', lines }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBinanceDerivativeContext(symbol: string): Promise<DerivativeDataContext | null> {
+  try {
+    const [fundingRes, openInterestRes, longShortRes] = await Promise.all([
+      fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`).catch(() => null),
+      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`).catch(() => null),
+      fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`).catch(() => null),
+    ]);
+
+    const lines: string[] = [];
+
+    if (fundingRes?.ok) {
+      const fundingPayload = await fundingRes.json();
+      const latestFunding = Array.isArray(fundingPayload) ? fundingPayload[0] : null;
+      const fundingRate = parseNumericString(latestFunding?.fundingRate);
+      if (fundingRate !== null) {
+        lines.push(`Perp funding rate: ${formatPercent(fundingRate * 100)}${fundingRate > 0 ? ' (longs pay shorts)' : fundingRate < 0 ? ' (shorts pay longs)' : ' (neutral)'}`);
+      }
+    }
+
+    if (openInterestRes?.ok) {
+      const openInterestPayload = await openInterestRes.json();
+      const openInterest = parseNumericString(openInterestPayload?.openInterest);
+      if (openInterest !== null) {
+        lines.push(`Perp open interest: ${openInterest.toLocaleString(undefined, { maximumFractionDigits: 2 })} contracts`);
+      }
+    }
+
+    if (longShortRes?.ok) {
+      const longShortPayload = await longShortRes.json();
+      const latestRatio = Array.isArray(longShortPayload) ? longShortPayload[0] : null;
+      const longShortRatio = parseNumericString(latestRatio?.longShortRatio);
+      const longAccount = parseNumericString(latestRatio?.longAccount);
+      const shortAccount = parseNumericString(latestRatio?.shortAccount);
+      if (longShortRatio !== null) {
+        lines.push(`Global long/short account ratio: ${longShortRatio.toFixed(2)}${longAccount !== null && shortAccount !== null ? ` (${formatPercent(longAccount * 100)} long / ${formatPercent(shortAccount * 100)} short)` : ''}`);
+      }
+    }
+
+    return lines.length > 0
+      ? { source: 'Binance Futures Public Data', lines }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSentimentContext(): Promise<SentimentDataContext | null> {
+  const contexts = await Promise.all([
+    fetchFearGreedContext(),
+    fetchCoinGeckoGlobalContext(),
+  ]);
+  const validContexts = contexts.filter((context): context is SentimentDataContext => context !== null);
+  const lines = validContexts.flatMap(context => context.lines);
+  const sources = validContexts.map(context => context.source).join(' + ');
+
+  return lines.length > 0
+    ? { source: sources, lines }
+    : null;
+}
+
 async function fetchBinanceData(symbol: string): Promise<MarketDataContext | null> {
   try {
     // Normalize symbol for Binance
@@ -113,19 +296,20 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       binanceSymbol = binanceSymbol + 'USDT';
     }
 
-    // Fetch ticker + recent klines in parallel
-    const [tickerRes, klinesRes] = await Promise.all([
+    const [tickerRes, klinesRes, derivativeContext, sentimentContext] = await Promise.all([
       fetch(`${BINANCE_REST_URL}/ticker/24hr?symbol=${binanceSymbol}`).catch(() => null),
       fetch(`${BINANCE_REST_URL}/klines?symbol=${binanceSymbol}&interval=1h&limit=50`).catch(() => null),
+      fetchBinanceDerivativeContext(binanceSymbol),
+      fetchSentimentContext(),
     ]);
 
     if (!tickerRes || !tickerRes.ok) return null;
 
-    const ticker = await tickerRes.json();
+    const ticker = await tickerRes.json() as BinanceTicker24h;
     const candles: { open: number; high: number; low: number; close: number; time: string }[] = [];
 
     if (klinesRes && klinesRes.ok) {
-      const klines = await klinesRes.json();
+      const klines = await klinesRes.json() as BinanceKline[];
       for (const k of klines) {
         candles.push({
           open: parseFloat(k[1]),
@@ -137,40 +321,51 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       }
     }
 
-    // Calculate key levels from recent candles
     const highs = candles.map(c => c.high);
     const lows = candles.map(c => c.low);
     const recentHigh = highs.length ? Math.max(...highs) : null;
     const recentLow = lows.length ? Math.min(...lows) : null;
-    const lastPrice = Number(ticker.lastPrice);
-    const hasPivotInputs = recentHigh !== null && recentLow !== null && Number.isFinite(lastPrice);
+    const lastPrice = parseNumericString(ticker.lastPrice);
+    const high24h = parseNumericString(ticker.highPrice);
+    const low24h = parseNumericString(ticker.lowPrice);
+    const volume24h = parseNumericString(ticker.volume);
+    const change24h = parseNumericString(ticker.priceChangePercent);
+    const hasPivotInputs = recentHigh !== null && recentLow !== null && lastPrice !== null;
     const pivotValue = hasPivotInputs ? (recentHigh + recentLow + lastPrice) / 3 : null;
     const pivotPoint = pivotValue !== null
       ? pivotValue.toFixed(2)
       : 'N/A';
+    const recentTrend = detectRecentTrend(candles.slice(-10));
+    const derivativeLines = derivativeContext?.lines ?? [];
+    const sentimentLines = sentimentContext?.lines ?? [];
 
     const keyLevels = [
-      `Current Price: ${ticker.lastPrice}`,
-      `24h High: ${ticker.highPrice}`,
-      `24h Low: ${ticker.lowPrice}`,
-      `24h Volume: ${parseFloat(ticker.volume).toLocaleString()}`,
-      `Price Change 24h: ${ticker.priceChangePercent}%`,
+      lastPrice !== null ? `Current Price: ${lastPrice}` : '',
+      high24h !== null ? `24h High: ${high24h}` : '',
+      low24h !== null ? `24h Low: ${low24h}` : '',
+      volume24h !== null ? `24h Volume: ${volume24h.toLocaleString()}` : '',
+      change24h !== null ? `Price Change 24h: ${formatPercent(change24h)}` : '',
       recentHigh ? `50-candle High: ${recentHigh}` : '',
       recentLow ? `50-candle Low: ${recentLow}` : '',
+      recentTrend ?? '',
       `Pivot Point: ${pivotPoint}`,
       pivotValue !== null && recentLow !== null ? `R1: ${(2 * pivotValue - recentLow).toFixed(2)}` : '',
       pivotValue !== null && recentHigh !== null ? `S1: ${(2 * pivotValue - recentHigh).toFixed(2)}` : '',
+      derivativeLines.length > 0 ? `Derivatives Context:\n${derivativeLines.map(line => `- ${line}`).join('\n')}` : '',
+      sentimentLines.length > 0 ? `Macro/Sentiment Context:\n${sentimentLines.map(line => `- ${line}`).join('\n')}` : '',
     ].filter(Boolean).join('\n');
 
     return {
       symbol: binanceSymbol,
-      currentPrice: Number.isFinite(lastPrice) ? lastPrice : null,
-      high24h: parseFloat(ticker.highPrice),
-      low24h: parseFloat(ticker.lowPrice),
-      volume24h: parseFloat(ticker.volume).toLocaleString(),
-      recentCandles: candles.slice(-10), // Last 10 candles for validation
+      currentPrice: lastPrice,
+      high24h,
+      low24h,
+      volume24h: volume24h !== null ? volume24h.toLocaleString() : null,
+      recentCandles: candles.slice(-10),
       keyLevels,
-      source: 'Binance Market Data API (Live)',
+      source: ['Binance Spot Market Data', derivativeContext?.source, sentimentContext?.source].filter(Boolean).join(' + '),
+      derivativeContext: derivativeLines.join('\n'),
+      sentimentContext: sentimentLines.join('\n'),
     };
   } catch {
     return null;
@@ -193,7 +388,10 @@ async function fetchCoinGeckoData(symbol: string): Promise<MarketDataContext | n
     const geckoId = symbolMap[cleanSymbol];
     if (!geckoId) return null;
 
-    const res = await fetch(`https://api.coingecko.com/api/v3/coins/${geckoId}?localization=false&tickers=false&community_data=false&developer_data=false`);
+    const [res, sentimentContext] = await Promise.all([
+      fetch(`https://api.coingecko.com/api/v3/coins/${geckoId}?localization=false&tickers=false&community_data=false&developer_data=false`),
+      fetchSentimentContext(),
+    ]);
     if (!res.ok) return null;
 
     const data = await res.json();
@@ -209,7 +407,8 @@ async function fetchCoinGeckoData(symbol: string): Promise<MarketDataContext | n
       `ATL: $${md.atl?.usd}`,
       `Market Cap Rank: #${data.market_cap_rank}`,
       `Total Volume 24h: $${md.total_volume?.usd?.toLocaleString()}`,
-    ].join('\n');
+      sentimentContext?.lines.length ? `Macro/Sentiment Context:\n${sentimentContext.lines.map(line => `- ${line}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n');
 
     return {
       symbol: cleanSymbol + 'USDT',
@@ -219,7 +418,8 @@ async function fetchCoinGeckoData(symbol: string): Promise<MarketDataContext | n
       volume24h: md.total_volume?.usd?.toLocaleString() || null,
       recentCandles: [],
       keyLevels,
-      source: 'CoinGecko API',
+      source: ['CoinGecko API', sentimentContext?.source].filter(Boolean).join(' + '),
+      sentimentContext: sentimentContext?.lines.join('\n'),
     };
   } catch {
     return null;
@@ -251,6 +451,7 @@ ${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData
 - Cross-reference price levels in the analysis against real market data.
 - Verify current price context and premium/discount assessment.
 - Check key round numbers, recent highs/lows, and pivot points.
+- Use derivatives/sentiment context to flag crowded positioning, liquidation-risk zones, and macro risk only when those fields are present.
 - Validate asset and timeframe correctness.`
     : `\n\n**NOTE:** External market data could not be fetched for this asset. Rely on visual chart verification only.`;
 }
@@ -267,18 +468,18 @@ ${results.slice(0, 6).map((result, index) => `${index + 1}. ${result.title}${res
 function buildLensResearchQuery(lens: string, symbol: string, prompt: string): string {
   const asset = symbol || prompt || 'current market';
   if (lens === 'smc') {
-    return `${asset} smart money concepts order blocks fair value gaps market structure institutional levels`;
+    return `${asset} smart money concepts order blocks fair value gaps market structure liquidity sweep open interest funding liquidation clusters`;
   }
   if (lens === 'gs') {
-    return `${asset} institutional order flow liquidity levels market positioning macro catalyst`;
+    return `${asset} institutional order flow liquidity levels market positioning macro catalyst derivatives open interest funding`;
   }
   if (lens === 'psych') {
-    return `${asset} trader sentiment liquidation levels stop loss clusters market positioning`;
+    return `${asset} trader sentiment liquidation levels stop loss clusters funding rate long short ratio market positioning`;
   }
   if (lens === 'ppa') {
-    return `${asset} technical analysis support resistance candlestick trend levels`;
+    return `${asset} technical analysis support resistance candlestick trend levels volume volatility`;
   }
-  return `${asset} institutional confluence technical analysis sentiment liquidity order flow`;
+  return `${asset} institutional confluence technical analysis sentiment liquidity order flow funding open interest liquidations`;
 }
 
 // ===== Google Search Grounding — Live News & Sentiment Verification =====
@@ -2190,7 +2391,8 @@ You MUST:
 8. Return the final corrected analysis and final corrected JSON annotations.
 
 **VERIFIER QUALITY GATES:**
-- Evidence first: every kept annotation must have a one-sentence reason tied to chart structure, market data, or framework evidence.
+- Evidence first: every kept annotation must have a one-sentence reason tied to chart structure, market data, derivative/sentiment context, or framework evidence.
+- External-source discipline: treat market data, derivatives, sentiment, and web/news as context checks; do not let them override visibly contradictory chart evidence.
 - Coordinates must match the chart: zones need yPercent/yEndPercent and xPercent/xEndPercent where visible; levels need yPercent; arrows need xPercent/yPercent/direction.
 - Confidence must be 0.00-1.00. Use 0.90+ only for obvious chart evidence, 0.75-0.89 for strong confluence, 0.62-0.74 for acceptable but limited evidence, and remove anything below ${VERIFIER_CONFIDENCE_FLOOR}.
 - Risk language must stay probabilistic. Replace certainty claims with probability/risk wording.
