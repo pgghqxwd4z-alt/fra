@@ -5,6 +5,7 @@ const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 const PRIMARY_VISION_MAX_TOKENS = 1536;
 const VERIFICATION_MAX_TOKENS = 1024;
 const TEXT_STAGE_MAX_TOKENS = 768;
+const VERIFIER_CONFIDENCE_FLOOR = 0.62;
 
 function getGroqHeaders(): Record<string, string> {
   if (!GROQ_API_URL) {
@@ -46,6 +47,9 @@ export interface ChartAnnotation {
   xPercent?: number;
   xEndPercent?: number;
   direction?: 'up' | 'down';
+  confidence?: number;
+  verifierStatus?: 'passed' | 'corrected' | 'removed';
+  verifierReason?: string;
 }
 
 export interface AnnotateResponse {
@@ -655,6 +659,73 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   return annotations;
 }
 
+function clampPercent(value: unknown): number | undefined {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.min(100, value));
+}
+
+function clampConfidence(value: unknown): number | undefined {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return undefined;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function isAnnotationType(value: unknown): value is ChartAnnotation['type'] {
+  return value === 'zone'
+    || value === 'level'
+    || value === 'arrow'
+    || value === 'label'
+    || value === 'bb_entry'
+    || value === 'iez'
+    || value === 'liquidity_void'
+    || value === 'sl_cluster'
+    || value === 'reaccumulation';
+}
+
+function isAnnotationDirection(value: unknown): value is ChartAnnotation['direction'] {
+  return value === 'up' || value === 'down';
+}
+
+function isVerifierStatus(value: unknown): value is ChartAnnotation['verifierStatus'] {
+  return value === 'passed' || value === 'corrected' || value === 'removed';
+}
+
+function parseVerifiedAnnotationItem(item: unknown, lens: string): ChartAnnotation | null {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const candidate = item as Partial<ChartAnnotation>;
+  const yPercent = clampPercent(candidate.yPercent);
+  if (!isAnnotationType(candidate.type) || candidate.lens !== lens || typeof candidate.label !== 'string' || yPercent === undefined) {
+    return null;
+  }
+
+  const confidence = clampConfidence(candidate.confidence);
+  if (candidate.verifierStatus === 'removed' || (confidence !== undefined && confidence < VERIFIER_CONFIDENCE_FLOOR)) {
+    return null;
+  }
+
+  return {
+    type: candidate.type,
+    lens: candidate.lens,
+    label: candidate.label,
+    yPercent,
+    yEndPercent: clampPercent(candidate.yEndPercent),
+    xPercent: clampPercent(candidate.xPercent),
+    xEndPercent: clampPercent(candidate.xEndPercent),
+    direction: isAnnotationDirection(candidate.direction) ? candidate.direction : undefined,
+    confidence,
+    verifierStatus: isVerifierStatus(candidate.verifierStatus) ? candidate.verifierStatus : undefined,
+    verifierReason: typeof candidate.verifierReason === 'string' ? candidate.verifierReason.slice(0, 180) : undefined,
+  };
+}
+
 function parseVerifiedAnnotations(text: string, lens: string): { annotations: ChartAnnotation[]; parsedJson: boolean } {
   const annotations: ChartAnnotation[] = [];
 
@@ -666,17 +737,9 @@ function parseVerifiedAnnotations(text: string, lens: string): { annotations: Ch
     if (!Array.isArray(parsed)) return { annotations, parsedJson: false };
 
     for (const item of parsed) {
-      if (item.type && item.lens === lens && item.label && typeof item.yPercent === 'number') {
-        annotations.push({
-          type: item.type,
-          lens: item.lens,
-          label: item.label,
-          yPercent: Math.max(0, Math.min(100, item.yPercent)),
-          yEndPercent: item.yEndPercent != null ? Math.max(0, Math.min(100, item.yEndPercent)) : undefined,
-          xPercent: item.xPercent != null ? Math.max(0, Math.min(100, item.xPercent)) : undefined,
-          xEndPercent: item.xEndPercent != null ? Math.max(0, Math.min(100, item.xEndPercent)) : undefined,
-          direction: item.direction,
-        });
+      const annotation = parseVerifiedAnnotationItem(item, lens);
+      if (annotation) {
+        annotations.push(annotation);
       }
     }
     return { annotations, parsedJson: true };
@@ -2117,13 +2180,20 @@ ${lensValidationRules[lens] || ''}
 You are the third AI for this lens. The first AI produced the lens analysis. The second validator checked chart/framework consistency. You now must fully understand this exact lens and strictly enforce its knowledge rules while using all relevant source evidence available below.
 
 You MUST:
-1. Re-check every annotation against the chart image and the lens rules above.
-2. Conduct evidence-based correction using live market data, source/news evidence, and the framework research context below.
-3. Preserve only annotations that the lens rules and evidence support.
-4. Correct wrong yPercent/xPercent placement, wrong price labels, invalid zones, unsupported certainty language, and framework violations.
-5. Add missing annotations only when the chart and evidence support them.
-6. Never invent unverifiable source claims. If external evidence is unavailable, state that chart-only verification was used.
-7. Return the final corrected analysis and final corrected JSON annotations.
+1. Re-check every annotation against the chart image, lens rules, and source evidence below.
+2. Classify every annotation as PASS, CORRECTED, or REMOVED.
+3. Preserve only annotations that have visible chart evidence and valid lens logic.
+4. Correct wrong yPercent/xPercent placement, price labels, zone boundaries, direction, mitigation/fill state, unsupported certainty language, and framework violations.
+5. Remove any annotation that is decorative, duplicated, vague, unsupported, contradicted by the chart, or below confidence ${VERIFIER_CONFIDENCE_FLOOR}.
+6. Add missing annotations only when the chart and evidence clearly support them.
+7. Never invent unverifiable source claims. If external evidence is unavailable, state that chart-only verification was used.
+8. Return the final corrected analysis and final corrected JSON annotations.
+
+**VERIFIER QUALITY GATES:**
+- Evidence first: every kept annotation must have a one-sentence reason tied to chart structure, market data, or framework evidence.
+- Coordinates must match the chart: zones need yPercent/yEndPercent and xPercent/xEndPercent where visible; levels need yPercent; arrows need xPercent/yPercent/direction.
+- Confidence must be 0.00-1.00. Use 0.90+ only for obvious chart evidence, 0.75-0.89 for strong confluence, 0.62-0.74 for acceptable but limited evidence, and remove anything below ${VERIFIER_CONFIDENCE_FLOOR}.
+- Risk language must stay probabilistic. Replace certainty claims with probability/risk wording.
 
 ${buildMarketDataSection(verificationMarketData)}
 
@@ -2134,13 +2204,16 @@ ${verificationKnowledgeContext}
 
 **OUTPUT FORMAT:**
 1. Start with "## Lens Specialist Verification" and summarize PASS/CORRECTED/REMOVED decisions in 5-8 bullets.
-2. Add "## Evidence Used" and list market/search sources actually used.
-3. Add the final corrected lens analysis.
-4. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
+2. Add "## Annotation Decision Log" with one compact line per original annotation: label — PASS/CORRECTED/REMOVED — evidence/reason.
+3. Add "## Evidence Used" and list market/search/chart/framework sources actually used.
+4. Add the final corrected lens analysis with probabilistic risk language.
+5. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
 
 IMPORTANT:
 - ALL annotations must use lens "${lens}".
 - Do not return default placeholder annotations.
+- Each kept JSON annotation must include "confidence", "verifierStatus", and "verifierReason".
+- "verifierStatus" must be "passed" or "corrected" for kept annotations. Do not include removed annotations in JSON.
 - If no annotation is evidence-supported, return an empty JSON array.`
               },
               {
@@ -2154,7 +2227,7 @@ IMPORTANT:
                   },
                   {
                     type: 'text',
-                    text: `**CURRENT VALIDATED ANALYSIS:**\n\n${analysisSource}\n\n**CURRENT VALIDATED ANNOTATIONS:**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\nPerform final specialist verification for lens "${lens}" and output the corrected analysis plus corrected JSON annotations.`
+                    text: `**CURRENT VALIDATED ANALYSIS:**\n\n${analysisSource}\n\n**CURRENT VALIDATED ANNOTATIONS:**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\nPerform final specialist verification for lens "${lens}". Audit every annotation, produce the decision log, remove weak/unsupported annotations, correct coordinates/labels, add confidence metadata, and output the corrected analysis plus corrected JSON annotations.`
                   }
                 ]
               }
