@@ -1,20 +1,24 @@
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY?.trim() || '';
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
-const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '';
+const GROQ_API_URL = GROQ_PROXY_URL
+  ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions`
+  : 'https://api.groq.com/openai/v1/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
-const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
-const PRIMARY_VISION_MAX_TOKENS = 1536;
-const VERIFICATION_MAX_TOKENS = 1024;
-const TEXT_STAGE_MAX_TOKENS = 768;
-const VERIFIER_CONFIDENCE_FLOOR = 0.62;
 
 function getGroqHeaders(): Record<string, string> {
-  if (!GROQ_API_URL) {
-    throw new Error('Missing Groq proxy configuration. Set VITE_GROQ_PROXY_URL.');
+  if (!GROQ_PROXY_URL && !GROQ_API_KEY) {
+    throw new Error('Missing Groq configuration. Set VITE_GROQ_API_KEY for local development or VITE_GROQ_PROXY_URL for public deployments.');
   }
 
-  return {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
+
+  if (!GROQ_PROXY_URL) {
+    headers.Authorization = `Bearer ${GROQ_API_KEY}`;
+  }
+
+  return headers;
 }
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
@@ -47,9 +51,6 @@ export interface ChartAnnotation {
   xPercent?: number;
   xEndPercent?: number;
   direction?: 'up' | 'down';
-  confidence?: number;
-  verifierStatus?: 'passed' | 'corrected' | 'removed';
-  verifierReason?: string;
 }
 
 export interface AnnotateResponse {
@@ -86,49 +87,6 @@ interface MarketDataContext {
   recentCandles: { open: number; high: number; low: number; close: number; time: string }[];
   keyLevels: string;
   source: string;
-  derivativeContext?: string;
-  sentimentContext?: string;
-}
-
-interface BinanceTicker24h {
-  lastPrice?: string;
-  highPrice?: string;
-  lowPrice?: string;
-  volume?: string;
-  priceChangePercent?: string;
-}
-
-interface BinanceKline extends Array<string | number> {
-  0: number;
-  1: string;
-  2: string;
-  3: string;
-  4: string;
-}
-
-interface FearGreedResponse {
-  data?: {
-    value?: string;
-    value_classification?: string;
-    timestamp?: string;
-  }[];
-}
-
-interface CoinGeckoGlobalResponse {
-  data?: {
-    market_cap_change_percentage_24h_usd?: number;
-    market_cap_percentage?: Record<string, number>;
-  };
-}
-
-interface DerivativeDataContext {
-  source: string;
-  lines: string[];
-}
-
-interface SentimentDataContext {
-  source: string;
-  lines: string[];
 }
 
 async function extractSymbolFromAnalysis(analysisText: string): Promise<string> {
@@ -148,146 +106,6 @@ async function extractSymbolFromAnalysis(analysisText: string): Promise<string> 
   return '';
 }
 
-function parseNumericString(value: unknown): number | null {
-  if (typeof value !== 'string' && typeof value !== 'number') {
-    return null;
-  }
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatPercent(value: number): string {
-  return `${value.toFixed(2)}%`;
-}
-
-function detectRecentTrend(candles: MarketDataContext['recentCandles']): string | null {
-  if (candles.length < 6) {
-    return null;
-  }
-
-  const firstClose = candles[0].close;
-  const lastClose = candles[candles.length - 1].close;
-  const change = ((lastClose - firstClose) / firstClose) * 100;
-  const recentHigh = Math.max(...candles.map(candle => candle.high));
-  const recentLow = Math.min(...candles.map(candle => candle.low));
-  const rangePosition = recentHigh !== recentLow
-    ? ((lastClose - recentLow) / (recentHigh - recentLow)) * 100
-    : 50;
-  const direction = change > 0.35 ? 'uptrend' : change < -0.35 ? 'downtrend' : 'range/chop';
-
-  return `Recent 10-candle trend: ${direction} (${formatPercent(change)}), close sits ${rangePosition.toFixed(0)}% through the recent high-low range.`;
-}
-
-async function fetchFearGreedContext(): Promise<SentimentDataContext | null> {
-  try {
-    const response = await fetch('https://api.alternative.me/fng/?limit=1&format=json').catch(() => null);
-    if (!response || !response.ok) {
-      return null;
-    }
-
-    const payload = await response.json() as FearGreedResponse;
-    const latest = payload.data?.[0];
-    if (!latest?.value || !latest.value_classification) {
-      return null;
-    }
-
-    return {
-      source: 'Alternative.me Crypto Fear & Greed Index',
-      lines: [
-        `Crypto Fear & Greed: ${latest.value}/100 (${latest.value_classification})`,
-      ],
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchCoinGeckoGlobalContext(): Promise<SentimentDataContext | null> {
-  try {
-    const response = await fetch('https://api.coingecko.com/api/v3/global').catch(() => null);
-    if (!response || !response.ok) {
-      return null;
-    }
-
-    const payload = await response.json() as CoinGeckoGlobalResponse;
-    const marketChange = payload.data?.market_cap_change_percentage_24h_usd;
-    const btcDominance = payload.data?.market_cap_percentage?.btc;
-    const ethDominance = payload.data?.market_cap_percentage?.eth;
-    const lines = [
-      typeof marketChange === 'number' ? `Crypto total market-cap 24h change: ${formatPercent(marketChange)}` : '',
-      typeof btcDominance === 'number' ? `BTC dominance: ${btcDominance.toFixed(1)}%` : '',
-      typeof ethDominance === 'number' ? `ETH dominance: ${ethDominance.toFixed(1)}%` : '',
-    ].filter(Boolean);
-
-    return lines.length > 0
-      ? { source: 'CoinGecko Global Market Data', lines }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchBinanceDerivativeContext(symbol: string): Promise<DerivativeDataContext | null> {
-  try {
-    const [fundingRes, openInterestRes, longShortRes] = await Promise.all([
-      fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`).catch(() => null),
-      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`).catch(() => null),
-      fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`).catch(() => null),
-    ]);
-
-    const lines: string[] = [];
-
-    if (fundingRes?.ok) {
-      const fundingPayload = await fundingRes.json();
-      const latestFunding = Array.isArray(fundingPayload) ? fundingPayload[0] : null;
-      const fundingRate = parseNumericString(latestFunding?.fundingRate);
-      if (fundingRate !== null) {
-        lines.push(`Perp funding rate: ${formatPercent(fundingRate * 100)}${fundingRate > 0 ? ' (longs pay shorts)' : fundingRate < 0 ? ' (shorts pay longs)' : ' (neutral)'}`);
-      }
-    }
-
-    if (openInterestRes?.ok) {
-      const openInterestPayload = await openInterestRes.json();
-      const openInterest = parseNumericString(openInterestPayload?.openInterest);
-      if (openInterest !== null) {
-        lines.push(`Perp open interest: ${openInterest.toLocaleString(undefined, { maximumFractionDigits: 2 })} contracts`);
-      }
-    }
-
-    if (longShortRes?.ok) {
-      const longShortPayload = await longShortRes.json();
-      const latestRatio = Array.isArray(longShortPayload) ? longShortPayload[0] : null;
-      const longShortRatio = parseNumericString(latestRatio?.longShortRatio);
-      const longAccount = parseNumericString(latestRatio?.longAccount);
-      const shortAccount = parseNumericString(latestRatio?.shortAccount);
-      if (longShortRatio !== null) {
-        lines.push(`Global long/short account ratio: ${longShortRatio.toFixed(2)}${longAccount !== null && shortAccount !== null ? ` (${formatPercent(longAccount * 100)} long / ${formatPercent(shortAccount * 100)} short)` : ''}`);
-      }
-    }
-
-    return lines.length > 0
-      ? { source: 'Binance Futures Public Data', lines }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchSentimentContext(): Promise<SentimentDataContext | null> {
-  const contexts = await Promise.all([
-    fetchFearGreedContext(),
-    fetchCoinGeckoGlobalContext(),
-  ]);
-  const validContexts = contexts.filter((context): context is SentimentDataContext => context !== null);
-  const lines = validContexts.flatMap(context => context.lines);
-  const sources = validContexts.map(context => context.source).join(' + ');
-
-  return lines.length > 0
-    ? { source: sources, lines }
-    : null;
-}
-
 async function fetchBinanceData(symbol: string): Promise<MarketDataContext | null> {
   try {
     // Normalize symbol for Binance
@@ -296,20 +114,19 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       binanceSymbol = binanceSymbol + 'USDT';
     }
 
-    const [tickerRes, klinesRes, derivativeContext, sentimentContext] = await Promise.all([
+    // Fetch ticker + recent klines in parallel
+    const [tickerRes, klinesRes] = await Promise.all([
       fetch(`${BINANCE_REST_URL}/ticker/24hr?symbol=${binanceSymbol}`).catch(() => null),
       fetch(`${BINANCE_REST_URL}/klines?symbol=${binanceSymbol}&interval=1h&limit=50`).catch(() => null),
-      fetchBinanceDerivativeContext(binanceSymbol),
-      fetchSentimentContext(),
     ]);
 
     if (!tickerRes || !tickerRes.ok) return null;
 
-    const ticker = await tickerRes.json() as BinanceTicker24h;
+    const ticker = await tickerRes.json();
     const candles: { open: number; high: number; low: number; close: number; time: string }[] = [];
 
     if (klinesRes && klinesRes.ok) {
-      const klines = await klinesRes.json() as BinanceKline[];
+      const klines = await klinesRes.json();
       for (const k of klines) {
         candles.push({
           open: parseFloat(k[1]),
@@ -321,51 +138,40 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       }
     }
 
+    // Calculate key levels from recent candles
     const highs = candles.map(c => c.high);
     const lows = candles.map(c => c.low);
     const recentHigh = highs.length ? Math.max(...highs) : null;
     const recentLow = lows.length ? Math.min(...lows) : null;
-    const lastPrice = parseNumericString(ticker.lastPrice);
-    const high24h = parseNumericString(ticker.highPrice);
-    const low24h = parseNumericString(ticker.lowPrice);
-    const volume24h = parseNumericString(ticker.volume);
-    const change24h = parseNumericString(ticker.priceChangePercent);
-    const hasPivotInputs = recentHigh !== null && recentLow !== null && lastPrice !== null;
+    const lastPrice = Number(ticker.lastPrice);
+    const hasPivotInputs = recentHigh !== null && recentLow !== null && Number.isFinite(lastPrice);
     const pivotValue = hasPivotInputs ? (recentHigh + recentLow + lastPrice) / 3 : null;
     const pivotPoint = pivotValue !== null
       ? pivotValue.toFixed(2)
       : 'N/A';
-    const recentTrend = detectRecentTrend(candles.slice(-10));
-    const derivativeLines = derivativeContext?.lines ?? [];
-    const sentimentLines = sentimentContext?.lines ?? [];
 
     const keyLevels = [
-      lastPrice !== null ? `Current Price: ${lastPrice}` : '',
-      high24h !== null ? `24h High: ${high24h}` : '',
-      low24h !== null ? `24h Low: ${low24h}` : '',
-      volume24h !== null ? `24h Volume: ${volume24h.toLocaleString()}` : '',
-      change24h !== null ? `Price Change 24h: ${formatPercent(change24h)}` : '',
+      `Current Price: ${ticker.lastPrice}`,
+      `24h High: ${ticker.highPrice}`,
+      `24h Low: ${ticker.lowPrice}`,
+      `24h Volume: ${parseFloat(ticker.volume).toLocaleString()}`,
+      `Price Change 24h: ${ticker.priceChangePercent}%`,
       recentHigh ? `50-candle High: ${recentHigh}` : '',
       recentLow ? `50-candle Low: ${recentLow}` : '',
-      recentTrend ?? '',
       `Pivot Point: ${pivotPoint}`,
       pivotValue !== null && recentLow !== null ? `R1: ${(2 * pivotValue - recentLow).toFixed(2)}` : '',
       pivotValue !== null && recentHigh !== null ? `S1: ${(2 * pivotValue - recentHigh).toFixed(2)}` : '',
-      derivativeLines.length > 0 ? `Derivatives Context:\n${derivativeLines.map(line => `- ${line}`).join('\n')}` : '',
-      sentimentLines.length > 0 ? `Macro/Sentiment Context:\n${sentimentLines.map(line => `- ${line}`).join('\n')}` : '',
     ].filter(Boolean).join('\n');
 
     return {
       symbol: binanceSymbol,
-      currentPrice: lastPrice,
-      high24h,
-      low24h,
-      volume24h: volume24h !== null ? volume24h.toLocaleString() : null,
-      recentCandles: candles.slice(-10),
+      currentPrice: Number.isFinite(lastPrice) ? lastPrice : null,
+      high24h: parseFloat(ticker.highPrice),
+      low24h: parseFloat(ticker.lowPrice),
+      volume24h: parseFloat(ticker.volume).toLocaleString(),
+      recentCandles: candles.slice(-10), // Last 10 candles for validation
       keyLevels,
-      source: ['Binance Spot Market Data', derivativeContext?.source, sentimentContext?.source].filter(Boolean).join(' + '),
-      derivativeContext: derivativeLines.join('\n'),
-      sentimentContext: sentimentLines.join('\n'),
+      source: 'Binance Market Data API (Live)',
     };
   } catch {
     return null;
@@ -388,10 +194,7 @@ async function fetchCoinGeckoData(symbol: string): Promise<MarketDataContext | n
     const geckoId = symbolMap[cleanSymbol];
     if (!geckoId) return null;
 
-    const [res, sentimentContext] = await Promise.all([
-      fetch(`https://api.coingecko.com/api/v3/coins/${geckoId}?localization=false&tickers=false&community_data=false&developer_data=false`),
-      fetchSentimentContext(),
-    ]);
+    const res = await fetch(`https://api.coingecko.com/api/v3/coins/${geckoId}?localization=false&tickers=false&community_data=false&developer_data=false`);
     if (!res.ok) return null;
 
     const data = await res.json();
@@ -407,8 +210,7 @@ async function fetchCoinGeckoData(symbol: string): Promise<MarketDataContext | n
       `ATL: $${md.atl?.usd}`,
       `Market Cap Rank: #${data.market_cap_rank}`,
       `Total Volume 24h: $${md.total_volume?.usd?.toLocaleString()}`,
-      sentimentContext?.lines.length ? `Macro/Sentiment Context:\n${sentimentContext.lines.map(line => `- ${line}`).join('\n')}` : '',
-    ].filter(Boolean).join('\n');
+    ].join('\n');
 
     return {
       symbol: cleanSymbol + 'USDT',
@@ -418,8 +220,7 @@ async function fetchCoinGeckoData(symbol: string): Promise<MarketDataContext | n
       volume24h: md.total_volume?.usd?.toLocaleString() || null,
       recentCandles: [],
       keyLevels,
-      source: ['CoinGecko API', sentimentContext?.source].filter(Boolean).join(' + '),
-      sentimentContext: sentimentContext?.lines.join('\n'),
+      source: 'CoinGecko API',
     };
   } catch {
     return null;
@@ -451,7 +252,6 @@ ${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData
 - Cross-reference price levels in the analysis against real market data.
 - Verify current price context and premium/discount assessment.
 - Check key round numbers, recent highs/lows, and pivot points.
-- Use derivatives/sentiment context to flag crowded positioning, liquidation-risk zones, and macro risk only when those fields are present.
 - Validate asset and timeframe correctness.`
     : `\n\n**NOTE:** External market data could not be fetched for this asset. Rely on visual chart verification only.`;
 }
@@ -468,18 +268,18 @@ ${results.slice(0, 6).map((result, index) => `${index + 1}. ${result.title}${res
 function buildLensResearchQuery(lens: string, symbol: string, prompt: string): string {
   const asset = symbol || prompt || 'current market';
   if (lens === 'smc') {
-    return `${asset} smart money concepts order blocks fair value gaps market structure liquidity sweep open interest funding liquidation clusters`;
+    return `${asset} smart money concepts order blocks fair value gaps market structure institutional levels`;
   }
   if (lens === 'gs') {
-    return `${asset} institutional order flow liquidity levels market positioning macro catalyst derivatives open interest funding`;
+    return `${asset} institutional order flow liquidity levels market positioning macro catalyst`;
   }
   if (lens === 'psych') {
-    return `${asset} trader sentiment liquidation levels stop loss clusters funding rate long short ratio market positioning`;
+    return `${asset} trader sentiment liquidation levels stop loss clusters market positioning`;
   }
   if (lens === 'ppa') {
-    return `${asset} technical analysis support resistance candlestick trend levels volume volatility`;
+    return `${asset} technical analysis support resistance candlestick trend levels`;
   }
-  return `${asset} institutional confluence technical analysis sentiment liquidity order flow funding open interest liquidations`;
+  return `${asset} institutional confluence technical analysis sentiment liquidity order flow`;
 }
 
 // ===== Google Search Grounding — Live News & Sentiment Verification =====
@@ -742,7 +542,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = TEXT_STAGE_MAX_TOKENS): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = 8192): Promise<string> {
   const headers = getGroqHeaders();
   let rateLimitExhausted = false;
 
@@ -775,20 +575,8 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
         rateLimitExhausted = true;
-        const error = await response.json().catch(() => null);
-        const errorMessage = error?.error?.message || `Groq API error: ${response.status}`;
+        // Rate limited — wait and retry with exponential backoff
         const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
-        const normalizedError = errorMessage.toLowerCase();
-        const longCapacityWindow = retryAfter > 30000
-          || normalizedError.includes('tokens per day')
-          || normalizedError.includes('tpd')
-          || normalizedError.includes('daily')
-          || /try again in \d+m/i.test(errorMessage);
-
-        if (longCapacityWindow) {
-          throw new Error(`Groq capacity limit reached for stage "${stage}": ${errorMessage}`);
-        }
-
         const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
         await new Promise(resolve => setTimeout(resolve, backoff));
@@ -810,11 +598,9 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
     } catch (err) {
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (isGroqRateLimitOrCapacityError(errMsg) && errMsg.includes('capacity limit reached')) {
-        throw err;
-      }
+      // Network error — wait and retry with longer backoff
       const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
+      const errMsg = err instanceof Error ? err.message : String(err);
       console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}. Retrying in ${backoff}ms...`);
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
@@ -860,73 +646,6 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   return annotations;
 }
 
-function clampPercent(value: unknown): number | undefined {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return undefined;
-  }
-
-  return Math.max(0, Math.min(100, value));
-}
-
-function clampConfidence(value: unknown): number | undefined {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return undefined;
-  }
-
-  return Math.max(0, Math.min(1, value));
-}
-
-function isAnnotationType(value: unknown): value is ChartAnnotation['type'] {
-  return value === 'zone'
-    || value === 'level'
-    || value === 'arrow'
-    || value === 'label'
-    || value === 'bb_entry'
-    || value === 'iez'
-    || value === 'liquidity_void'
-    || value === 'sl_cluster'
-    || value === 'reaccumulation';
-}
-
-function isAnnotationDirection(value: unknown): value is ChartAnnotation['direction'] {
-  return value === 'up' || value === 'down';
-}
-
-function isVerifierStatus(value: unknown): value is ChartAnnotation['verifierStatus'] {
-  return value === 'passed' || value === 'corrected' || value === 'removed';
-}
-
-function parseVerifiedAnnotationItem(item: unknown, lens: string): ChartAnnotation | null {
-  if (!item || typeof item !== 'object') {
-    return null;
-  }
-
-  const candidate = item as Partial<ChartAnnotation>;
-  const yPercent = clampPercent(candidate.yPercent);
-  if (!isAnnotationType(candidate.type) || candidate.lens !== lens || typeof candidate.label !== 'string' || yPercent === undefined) {
-    return null;
-  }
-
-  const confidence = clampConfidence(candidate.confidence);
-  if (candidate.verifierStatus === 'removed' || (confidence !== undefined && confidence < VERIFIER_CONFIDENCE_FLOOR)) {
-    return null;
-  }
-
-  return {
-    type: candidate.type,
-    lens: candidate.lens,
-    label: candidate.label,
-    yPercent,
-    yEndPercent: clampPercent(candidate.yEndPercent),
-    xPercent: clampPercent(candidate.xPercent),
-    xEndPercent: clampPercent(candidate.xEndPercent),
-    direction: isAnnotationDirection(candidate.direction) ? candidate.direction : undefined,
-    confidence,
-    verifierStatus: isVerifierStatus(candidate.verifierStatus) ? candidate.verifierStatus : undefined,
-    verifierReason: typeof candidate.verifierReason === 'string' ? candidate.verifierReason.slice(0, 180) : undefined,
-  };
-}
-
 function parseVerifiedAnnotations(text: string, lens: string): { annotations: ChartAnnotation[]; parsedJson: boolean } {
   const annotations: ChartAnnotation[] = [];
 
@@ -938,9 +657,17 @@ function parseVerifiedAnnotations(text: string, lens: string): { annotations: Ch
     if (!Array.isArray(parsed)) return { annotations, parsedJson: false };
 
     for (const item of parsed) {
-      const annotation = parseVerifiedAnnotationItem(item, lens);
-      if (annotation) {
-        annotations.push(annotation);
+      if (item.type && item.lens === lens && item.label && typeof item.yPercent === 'number') {
+        annotations.push({
+          type: item.type,
+          lens: item.lens,
+          label: item.label,
+          yPercent: Math.max(0, Math.min(100, item.yPercent)),
+          yEndPercent: item.yEndPercent != null ? Math.max(0, Math.min(100, item.yEndPercent)) : undefined,
+          xPercent: item.xPercent != null ? Math.max(0, Math.min(100, item.xPercent)) : undefined,
+          xEndPercent: item.xEndPercent != null ? Math.max(0, Math.min(100, item.xEndPercent)) : undefined,
+          direction: item.direction,
+        });
       }
     }
     return { annotations, parsedJson: true };
@@ -980,18 +707,13 @@ function isGroqRateLimitOrCapacityError(message: string): boolean {
     || normalized.includes('rate-limit')
     || normalized.includes('too many requests')
     || normalized.includes('quota')
-    || normalized.includes('capacity')
-    || normalized.includes('request too large')
-    || normalized.includes('tokens per minute')
-    || normalized.includes('tokens per day')
-    || normalized.includes('tpm')
-    || normalized.includes('tpd');
+    || normalized.includes('capacity');
 }
 
 function getFrameworkFallbackReason(errorMessage: string): string {
   return isTemporaryGroqAvailabilityError(errorMessage)
-    ? 'Groq capacity is busy after repeated checks.'
-    : 'Groq capacity is busy for this request.';
+    ? 'Live AI verification is temporarily unavailable after repeated capacity checks.'
+    : 'Live AI verification is temporarily unavailable for this request.';
 }
 
 function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
@@ -1001,7 +723,7 @@ function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessa
   if (lens === 'gs') {
     return `**GS Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Institutional Flow Checklist
 - Map the dominant impulse leg first, then identify the liquidity voids left by fast displacement.
@@ -1024,7 +746,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic Goldman Sachs in
   if (lens === 'smc') {
     return `**SMC Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic SMC framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic SMC framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## SMC Checklist
 - Validate bullish order blocks as the last down candle before bullish displacement.
@@ -1041,7 +763,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic SMC framework in
   if (lens === 'psych') {
     return `**PSYCH Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic trading-psychology framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic trading-psychology framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Psychology Checklist
 - Identify where retail traders are likely trapped after a late breakout or breakdown.
@@ -1057,7 +779,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic trading-psycholo
   if (lens === 'ppa') {
     return `**PPA Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic price-action framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic price-action framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Price Action Checklist
 - Mark support/resistance only at repeated reactions or clear role flips.
@@ -1072,7 +794,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic price-action fra
 
   return `**ISYN Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic institutional-synthesis framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic institutional-synthesis framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Four-Layer Checklist
 - Psychology: define risk and probabilistic expectation before trade direction.
@@ -2216,13 +1938,13 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               },
               {
                 type: 'text',
-                text: 'Analyze this chart with concise institutional precision.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Give the highest-value chart-specific read only.\n- Be specific with visible levels where possible.\n- Include probability percentages for the next likely move.\n- Keep the response compact so Groq live vision can complete reliably.\n\nRESPONSE FORMAT:\n1. Provide 5-8 concise bullets for the selected lens.\n2. Add a short AI PREDICTION ENGINE section with bias, invalidation, and 1-2 targets.\n3. Then provide one JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nReturn 3-5 high-confidence annotations only.'
+                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Be EXTREMELY specific with price levels. Never say "around" or "approximately" — give exact numbers.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
               }
             ]
           }
         ];
 
-        const analysisText = await callGroq(messages, GROQ_VISION_MODEL, 2, `primary-${lens}`, PRIMARY_VISION_MAX_TOKENS);
+        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`, 4096);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
@@ -2271,7 +1993,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 1, `knowledge-${lens}`, TEXT_STAGE_MAX_TOKENS);
+                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -2340,7 +2062,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, GROQ_VISION_MODEL, 1, `validator-${lens}`, VERIFICATION_MAX_TOKENS);
+            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`, 4096);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -2381,21 +2103,13 @@ ${lensValidationRules[lens] || ''}
 You are the third AI for this lens. The first AI produced the lens analysis. The second validator checked chart/framework consistency. You now must fully understand this exact lens and strictly enforce its knowledge rules while using all relevant source evidence available below.
 
 You MUST:
-1. Re-check every annotation against the chart image, lens rules, and source evidence below.
-2. Classify every annotation as PASS, CORRECTED, or REMOVED.
-3. Preserve only annotations that have visible chart evidence and valid lens logic.
-4. Correct wrong yPercent/xPercent placement, price labels, zone boundaries, direction, mitigation/fill state, unsupported certainty language, and framework violations.
-5. Remove any annotation that is decorative, duplicated, vague, unsupported, contradicted by the chart, or below confidence ${VERIFIER_CONFIDENCE_FLOOR}.
-6. Add missing annotations only when the chart and evidence clearly support them.
-7. Never invent unverifiable source claims. If external evidence is unavailable, state that chart-only verification was used.
-8. Return the final corrected analysis and final corrected JSON annotations.
-
-**VERIFIER QUALITY GATES:**
-- Evidence first: every kept annotation must have a one-sentence reason tied to chart structure, market data, derivative/sentiment context, or framework evidence.
-- External-source discipline: treat market data, derivatives, sentiment, and web/news as context checks; do not let them override visibly contradictory chart evidence.
-- Coordinates must match the chart: zones need yPercent/yEndPercent and xPercent/xEndPercent where visible; levels need yPercent; arrows need xPercent/yPercent/direction.
-- Confidence must be 0.00-1.00. Use 0.90+ only for obvious chart evidence, 0.75-0.89 for strong confluence, 0.62-0.74 for acceptable but limited evidence, and remove anything below ${VERIFIER_CONFIDENCE_FLOOR}.
-- Risk language must stay probabilistic. Replace certainty claims with probability/risk wording.
+1. Re-check every annotation against the chart image and the lens rules above.
+2. Conduct evidence-based correction using live market data, source/news evidence, and the framework research context below.
+3. Preserve only annotations that the lens rules and evidence support.
+4. Correct wrong yPercent/xPercent placement, wrong price labels, invalid zones, unsupported certainty language, and framework violations.
+5. Add missing annotations only when the chart and evidence support them.
+6. Never invent unverifiable source claims. If external evidence is unavailable, state that chart-only verification was used.
+7. Return the final corrected analysis and final corrected JSON annotations.
 
 ${buildMarketDataSection(verificationMarketData)}
 
@@ -2406,16 +2120,13 @@ ${verificationKnowledgeContext}
 
 **OUTPUT FORMAT:**
 1. Start with "## Lens Specialist Verification" and summarize PASS/CORRECTED/REMOVED decisions in 5-8 bullets.
-2. Add "## Annotation Decision Log" with one compact line per original annotation: label — PASS/CORRECTED/REMOVED — evidence/reason.
-3. Add "## Evidence Used" and list market/search/chart/framework sources actually used.
-4. Add the final corrected lens analysis with probabilistic risk language.
-5. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
+2. Add "## Evidence Used" and list market/search sources actually used.
+3. Add the final corrected lens analysis.
+4. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
 
 IMPORTANT:
 - ALL annotations must use lens "${lens}".
 - Do not return default placeholder annotations.
-- Each kept JSON annotation must include "confidence", "verifierStatus", and "verifierReason".
-- "verifierStatus" must be "passed" or "corrected" for kept annotations. Do not include removed annotations in JSON.
 - If no annotation is evidence-supported, return an empty JSON array.`
               },
               {
@@ -2429,13 +2140,13 @@ IMPORTANT:
                   },
                   {
                     type: 'text',
-                    text: `**CURRENT VALIDATED ANALYSIS:**\n\n${analysisSource}\n\n**CURRENT VALIDATED ANNOTATIONS:**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\nPerform final specialist verification for lens "${lens}". Audit every annotation, produce the decision log, remove weak/unsupported annotations, correct coordinates/labels, add confidence metadata, and output the corrected analysis plus corrected JSON annotations.`
+                    text: `**CURRENT VALIDATED ANALYSIS:**\n\n${analysisSource}\n\n**CURRENT VALIDATED ANNOTATIONS:**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\nPerform final specialist verification for lens "${lens}" and output the corrected analysis plus corrected JSON annotations.`
                   }
                 ]
               }
             ];
 
-            const verifierText = await callGroq(verifierMessages, GROQ_VISION_MODEL, 1, `verifier-${lens}`, VERIFICATION_MAX_TOKENS);
+            const verifierText = await callGroq(verifierMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 2, `verifier-${lens}`, 4096);
             const verifierResult = parseVerifiedAnnotations(verifierText, lens);
             const verifierAnnotations = verifierResult.annotations;
 
@@ -2507,7 +2218,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 1, `fallback-${lens}`, TEXT_STAGE_MAX_TOKENS);
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 2, `fallback-${lens}`, 2048);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -2672,7 +2383,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 1, 'synthesis-entry', TEXT_STAGE_MAX_TOKENS);
+          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {
