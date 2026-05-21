@@ -1,5 +1,5 @@
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
-const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '';
+const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '/api/groq/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 const PRIMARY_VISION_MAX_TOKENS = 1536;
@@ -7,10 +7,6 @@ const VERIFICATION_MAX_TOKENS = 1024;
 const TEXT_STAGE_MAX_TOKENS = 768;
 
 function getGroqHeaders(): Record<string, string> {
-  if (!GROQ_API_URL) {
-    throw new Error('Missing Groq proxy configuration. Set VITE_GROQ_PROXY_URL.');
-  }
-
   return {
     'Content-Type': 'application/json',
   };
@@ -352,6 +348,7 @@ async function fetchWebSearchResults(query: string): Promise<WebSearchResult[]> 
 
 interface PipelineHealth {
   apiStatus: 'healthy' | 'degraded' | 'down';
+  fallbackActive: boolean;
   rateLimitRemaining: number;
   rateLimitReset: number; // timestamp ms
   totalCallsMade: number;
@@ -374,6 +371,7 @@ interface PipelineDecision {
 
 const pipelineHealth: PipelineHealth = {
   apiStatus: 'healthy',
+  fallbackActive: false,
   rateLimitRemaining: 30,
   rateLimitReset: 0,
   totalCallsMade: 0,
@@ -394,6 +392,17 @@ const pipelineHealth: PipelineHealth = {
 // The Orchestrator decides how to run the pipeline based on current health
 function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDecision {
   const now = Date.now();
+
+  if (pipelineHealth.fallbackActive) {
+    return {
+      shouldRunValidator: true,
+      shouldRunVerifier: true,
+      shouldRunKnowledgeSearch: true,
+      shouldFetchMarketData: true,
+      delayBeforeNextCallMs: 1000,
+      reason: 'OpenAI fallback is active — keeping full verifier pipeline enabled'
+    };
+  }
 
   // If API is down, skip optional stages
   if (pipelineHealth.apiStatus === 'down') {
@@ -565,6 +574,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
         remaining: response.headers.get('x-ratelimit-remaining-requests') || undefined,
         reset: response.headers.get('x-ratelimit-reset') || undefined,
       };
+      const provider = response.headers.get('x-quantsage-ai-provider') || 'groq';
 
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
@@ -598,7 +608,11 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
 
       const duration = Date.now() - start;
       orchestratorRecordCall(stage, duration, true, rateLimitHeaders);
-      console.log(`[Orchestrator] ${stage} completed in ${duration}ms. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
+      if (provider === 'openai-fallback') {
+        pipelineHealth.fallbackActive = true;
+        pipelineHealth.apiStatus = 'healthy';
+      }
+      console.log(`[Orchestrator] ${stage} completed in ${duration}ms via ${provider}. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
 
       const data = await response.json();
       return data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
