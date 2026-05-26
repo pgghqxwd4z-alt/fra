@@ -491,7 +491,7 @@ const Visualizer: React.FC = () => {
                     rel="noreferrer"
                     className="mb-3 inline-flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[8px] font-bold uppercase tracking-[0.2em] text-emerald-300 hover:bg-emerald-500/20 transition-colors"
                   >
-                    Groq capacity help
+                    AI capacity recovery
                     <i className="fa-solid fa-arrow-up-right-from-square"></i>
                   </a>
                 )}

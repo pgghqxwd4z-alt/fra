@@ -19,12 +19,12 @@ const GroqCapacityHelp: React.FC = () => (
                 QuantSage AI Status Help
               </p>
               <h1 className="text-3xl md:text-5xl font-black tracking-tight text-white mb-4">
-                Groq capacity is busy
+                AI capacity recovery
               </h1>
               <p className="text-slate-300 leading-relaxed max-w-3xl">
-                QuantSage reached Groq, but Groq could not complete one of the AI vision,
-                validation, or verifier stages at that moment. This is usually a temporary
-                capacity, rate-limit, or token-limit response from the AI provider.
+                QuantSage now routes AI requests through a server-side recovery proxy. If Groq
+                is busy or rate-limited, the proxy can retry the request with the configured
+                fallback provider without exposing provider keys in the browser.
               </p>
             </div>
             <a
@@ -43,9 +43,9 @@ const GroqCapacityHelp: React.FC = () => (
               What it means
             </h2>
             <p className="text-sm leading-7 text-slate-300">
-              The chart is not wrong and the platform did not lose your setup. The AI provider
-              was temporarily too busy, or the current API key hit a request/token limit before
-              the full chart-specific verifier could finish.
+              The chart is not wrong and the platform did not lose your setup. A capacity state
+              means the primary Groq provider could not complete a stage, so QuantSage should
+              recover through the proxy fallback when that provider is configured.
             </p>
           </div>
           <div className="glass-panel p-6">
@@ -55,7 +55,7 @@ const GroqCapacityHelp: React.FC = () => (
             <ul className="space-y-3 text-sm text-slate-300">
               <li className="flex gap-3">
                 <span className="mt-2 h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
-                Vision models use more capacity than text-only prompts.
+                Groq vision models can hit shared capacity before text-only prompts.
               </li>
               <li className="flex gap-3">
                 <span className="mt-2 h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
@@ -63,7 +63,7 @@ const GroqCapacityHelp: React.FC = () => (
               </li>
               <li className="flex gap-3">
                 <span className="mt-2 h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
-                Free or low-limit Groq accounts have stricter capacity windows.
+                The proxy needs both Groq and fallback-provider keys configured server-side.
               </li>
             </ul>
           </div>
@@ -91,9 +91,8 @@ const GroqCapacityHelp: React.FC = () => (
           </h2>
           <p className="text-sm leading-7 text-slate-300 mb-5">
             Check the Groq console for usage, billing, and rate limits. If production users
-            see this frequently, use a higher-limit Groq key on the server-side proxy or add a
-            controlled fallback provider on the proxy. Do not place provider API keys in the
-            browser bundle.
+            see this frequently, keep the server-side proxy running with a higher-limit Groq key
+            and a configured fallback provider. Do not place provider API keys in the browser bundle.
           </p>
           <div className="flex flex-wrap gap-3">
             <a
