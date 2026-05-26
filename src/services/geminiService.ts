@@ -1,15 +1,24 @@
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY?.trim() || '';
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
-const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '/api/groq/chat/completions';
+const GROQ_API_URL = GROQ_PROXY_URL
+  ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions`
+  : 'https://api.groq.com/openai/v1/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
-const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
-const PRIMARY_VISION_MAX_TOKENS = 1536;
-const VERIFICATION_MAX_TOKENS = 1024;
-const TEXT_STAGE_MAX_TOKENS = 768;
 
 function getGroqHeaders(): Record<string, string> {
-  return {
+  if (!GROQ_PROXY_URL && !GROQ_API_KEY) {
+    throw new Error('Missing Groq configuration. Set VITE_GROQ_API_KEY for local development or VITE_GROQ_PROXY_URL for public deployments.');
+  }
+
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
+
+  if (!GROQ_PROXY_URL) {
+    headers.Authorization = `Bearer ${GROQ_API_KEY}`;
+  }
+
+  return headers;
 }
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
@@ -348,7 +357,6 @@ async function fetchWebSearchResults(query: string): Promise<WebSearchResult[]> 
 
 interface PipelineHealth {
   apiStatus: 'healthy' | 'degraded' | 'down';
-  fallbackActive: boolean;
   rateLimitRemaining: number;
   rateLimitReset: number; // timestamp ms
   totalCallsMade: number;
@@ -371,7 +379,6 @@ interface PipelineDecision {
 
 const pipelineHealth: PipelineHealth = {
   apiStatus: 'healthy',
-  fallbackActive: false,
   rateLimitRemaining: 30,
   rateLimitReset: 0,
   totalCallsMade: 0,
@@ -392,17 +399,6 @@ const pipelineHealth: PipelineHealth = {
 // The Orchestrator decides how to run the pipeline based on current health
 function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDecision {
   const now = Date.now();
-
-  if (pipelineHealth.fallbackActive) {
-    return {
-      shouldRunValidator: true,
-      shouldRunVerifier: true,
-      shouldRunKnowledgeSearch: true,
-      shouldFetchMarketData: true,
-      delayBeforeNextCallMs: 1000,
-      reason: 'OpenAI fallback is active — keeping full verifier pipeline enabled'
-    };
-  }
 
   // If API is down, skip optional stages
   if (pipelineHealth.apiStatus === 'down') {
@@ -546,7 +542,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = TEXT_STAGE_MAX_TOKENS): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = 8192): Promise<string> {
   const headers = getGroqHeaders();
   let rateLimitExhausted = false;
 
@@ -574,26 +570,13 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
         remaining: response.headers.get('x-ratelimit-remaining-requests') || undefined,
         reset: response.headers.get('x-ratelimit-reset') || undefined,
       };
-      const provider = response.headers.get('x-quantsage-ai-provider') || 'groq';
 
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
         rateLimitExhausted = true;
-        const error = await response.json().catch(() => null);
-        const errorMessage = error?.error?.message || `Groq API error: ${response.status}`;
+        // Rate limited — wait and retry with exponential backoff
         const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
-        const normalizedError = errorMessage.toLowerCase();
-        const longCapacityWindow = retryAfter > 30000
-          || normalizedError.includes('tokens per day')
-          || normalizedError.includes('tpd')
-          || normalizedError.includes('daily')
-          || /try again in \d+m/i.test(errorMessage);
-
-        if (longCapacityWindow) {
-          throw new Error(`Groq capacity limit reached for stage "${stage}": ${errorMessage}`);
-        }
-
         const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
         await new Promise(resolve => setTimeout(resolve, backoff));
@@ -608,22 +591,16 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
 
       const duration = Date.now() - start;
       orchestratorRecordCall(stage, duration, true, rateLimitHeaders);
-      if (provider === 'openai-fallback') {
-        pipelineHealth.fallbackActive = true;
-        pipelineHealth.apiStatus = 'healthy';
-      }
-      console.log(`[Orchestrator] ${stage} completed in ${duration}ms via ${provider}. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
+      console.log(`[Orchestrator] ${stage} completed in ${duration}ms. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
 
       const data = await response.json();
       return data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
     } catch (err) {
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (isGroqRateLimitOrCapacityError(errMsg) && errMsg.includes('capacity limit reached')) {
-        throw err;
-      }
+      // Network error — wait and retry with longer backoff
       const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
+      const errMsg = err instanceof Error ? err.message : String(err);
       console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}. Retrying in ${backoff}ms...`);
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
@@ -730,18 +707,13 @@ function isGroqRateLimitOrCapacityError(message: string): boolean {
     || normalized.includes('rate-limit')
     || normalized.includes('too many requests')
     || normalized.includes('quota')
-    || normalized.includes('capacity')
-    || normalized.includes('request too large')
-    || normalized.includes('tokens per minute')
-    || normalized.includes('tokens per day')
-    || normalized.includes('tpm')
-    || normalized.includes('tpd');
+    || normalized.includes('capacity');
 }
 
 function getFrameworkFallbackReason(errorMessage: string): string {
   return isTemporaryGroqAvailabilityError(errorMessage)
-    ? 'Groq capacity is busy after repeated checks.'
-    : 'Groq capacity is busy for this request.';
+    ? 'Live AI verification is temporarily unavailable after repeated capacity checks.'
+    : 'Live AI verification is temporarily unavailable for this request.';
 }
 
 function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
@@ -751,7 +723,7 @@ function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessa
   if (lens === 'gs') {
     return `**GS Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic Goldman Sachs institutional-flow framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Institutional Flow Checklist
 - Map the dominant impulse leg first, then identify the liquidity voids left by fast displacement.
@@ -774,7 +746,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic Goldman Sachs in
   if (lens === 'smc') {
     return `**SMC Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic SMC framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic SMC framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## SMC Checklist
 - Validate bullish order blocks as the last down candle before bullish displacement.
@@ -791,7 +763,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic SMC framework in
   if (lens === 'psych') {
     return `**PSYCH Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic trading-psychology framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic trading-psychology framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Psychology Checklist
 - Identify where retail traders are likely trapped after a late breakout or breakdown.
@@ -807,7 +779,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic trading-psycholo
   if (lens === 'ppa') {
     return `**PPA Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic price-action framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic price-action framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Price Action Checklist
 - Mark support/resistance only at repeated reactions or clear role flips.
@@ -822,7 +794,7 @@ _Groq capacity is busy, so QuantSage is showing a deterministic price-action fra
 
   return `**ISYN Analysis — Framework Fallback**
 
-_Groq capacity is busy, so QuantSage is showing a deterministic institutional-synthesis framework instead of blocking the chart. Retry later for full AI chart-specific verification._
+_The live vision model is temporarily unavailable, so QuantSage is showing a deterministic institutional-synthesis framework instead of a temporary failure. Retry for full AI chart-specific verification._
 
 ## Four-Layer Checklist
 - Psychology: define risk and probabilistic expectation before trade direction.
@@ -1966,13 +1938,13 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               },
               {
                 type: 'text',
-                text: 'Analyze this chart with concise institutional precision.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Give the highest-value chart-specific read only.\n- Be specific with visible levels where possible.\n- Include probability percentages for the next likely move.\n- Keep the response compact so Groq live vision can complete reliably.\n\nRESPONSE FORMAT:\n1. Provide 5-8 concise bullets for the selected lens.\n2. Add a short AI PREDICTION ENGINE section with bias, invalidation, and 1-2 targets.\n3. Then provide one JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nReturn 3-5 high-confidence annotations only.'
+                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Be EXTREMELY specific with price levels. Never say "around" or "approximately" — give exact numbers.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
               }
             ]
           }
         ];
 
-        const analysisText = await callGroq(messages, GROQ_VISION_MODEL, 2, `primary-${lens}`, PRIMARY_VISION_MAX_TOKENS);
+        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`, 4096);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
@@ -2021,7 +1993,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 1, `knowledge-${lens}`, TEXT_STAGE_MAX_TOKENS);
+                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -2090,7 +2062,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, GROQ_VISION_MODEL, 1, `validator-${lens}`, VERIFICATION_MAX_TOKENS);
+            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`, 4096);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -2174,7 +2146,7 @@ IMPORTANT:
               }
             ];
 
-            const verifierText = await callGroq(verifierMessages, GROQ_VISION_MODEL, 1, `verifier-${lens}`, VERIFICATION_MAX_TOKENS);
+            const verifierText = await callGroq(verifierMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 2, `verifier-${lens}`, 4096);
             const verifierResult = parseVerifiedAnnotations(verifierText, lens);
             const verifierAnnotations = verifierResult.annotations;
 
@@ -2246,7 +2218,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 1, `fallback-${lens}`, TEXT_STAGE_MAX_TOKENS);
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 2, `fallback-${lens}`, 2048);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -2266,7 +2238,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
 
               allAnalysisParts.push(
                 `**${lens.toUpperCase()} Analysis — Fallback Mode (Text-Only AI)**\n\n` +
-                `_Note: Groq capacity is busy, so this analysis is framework-based rather than chart-specific. Retry later for full visual analysis._\n\n` +
+                `_Note: The vision model was unavailable, so this analysis is framework-based rather than chart-specific. Retry for full visual analysis._\n\n` +
                 cleanFallback
               );
 
@@ -2411,7 +2383,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 1, 'synthesis-entry', TEXT_STAGE_MAX_TOKENS);
+          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {

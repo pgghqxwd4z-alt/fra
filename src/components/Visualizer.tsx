@@ -3,51 +3,6 @@ import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiServic
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
-const GROQ_VISION_MAX_IMAGE_DIMENSION = 1280;
-const GROQ_VISION_IMAGE_QUALITY = 0.82;
-const GROQ_VISION_INLINE_IMAGE_LIMIT = 650_000;
-
-function cleanAnalysisForDisplay(text: string): string {
-  const unavailablePhrase = ['the', 'live', 'vision', 'model', 'is', 'temporarily', 'unavailable'].join('\\s+');
-
-  return text
-    .replace(new RegExp(unavailablePhrase, 'gi'), 'Groq capacity is busy')
-    .replace(/Retry for full AI chart-specific verification/gi, 'Retry later for full AI chart-specific verification');
-}
-
-function isGroqCapacityNotice(text: string | null): boolean {
-  return Boolean(text && /Groq capacity is busy|rate limit|429/i.test(text));
-}
-
-function loadImageElement(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
-}
-
-async function optimizeChartImageForVision(dataUrl: string): Promise<string> {
-  if (dataUrl.length <= GROQ_VISION_INLINE_IMAGE_LIMIT) {
-    return dataUrl.split(',')[1] || dataUrl;
-  }
-
-  const img = await loadImageElement(dataUrl);
-  const scale = Math.min(1, GROQ_VISION_MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(img.width * scale));
-  canvas.height = Math.max(1, Math.round(img.height * scale));
-
-  const context = canvas.getContext('2d');
-  if (!context) {
-    return dataUrl.split(',')[1] || dataUrl;
-  }
-
-  context.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', GROQ_VISION_IMAGE_QUALITY).split(',')[1];
-}
-
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
     <div className="absolute inset-0 bg-emerald-500/5 rounded-lg border border-white/5 rotate-45 group-hover/icon:rotate-90 group-hover/icon:bg-emerald-500/10 transition-all duration-700"></div>
@@ -203,7 +158,7 @@ const Visualizer: React.FC = () => {
     setProcessing(true);
     setErrorMessage(null);
     try {
-      const base64 = await optimizeChartImageForVision(image);
+      const base64 = image.split(',')[1];
       const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
       
       // Draw visual annotations on the chart image
@@ -214,14 +169,14 @@ const Visualizer: React.FC = () => {
         setResultImage(result.image);
       }
       
-      setAnalysis(cleanAnalysisForDisplay(result.analysis));
+      setAnalysis(result.analysis);
       setShowOriginal(false);
     } catch (error) {
       console.error('[Annotation Engine]', error);
       const msg = error instanceof Error ? error.message : String(error);
       const isRateLimit = msg.includes('429') || msg.includes('rate') || msg.includes('Rate');
       setErrorMessage(isRateLimit
-        ? 'Groq capacity is busy. The AI provider could not complete this request right now; wait 1–5 minutes, then retry with one lens or a smaller chart.'
+        ? 'Rate limit reached. The Groq API allows 30 requests/min on the free tier. Please wait 30-60 seconds and try again.'
         : 'Annotation engine error: ' + msg.slice(0, 150) + '. Check console for details.'
       );
     } finally {
@@ -236,7 +191,6 @@ const Visualizer: React.FC = () => {
     { id: 'ppa', label: 'Pure Price Action', icon: 'fa-chart-simple', color: 'text-amber-400' },
     { id: 'isyn', label: 'Inst. Synthesis', icon: 'fa-layer-group', color: 'text-violet-400' },
   ];
-  const showGroqCapacityHelp = isGroqCapacityNotice(analysis) || isGroqCapacityNotice(errorMessage);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -392,17 +346,6 @@ const Visualizer: React.FC = () => {
                     <div className="min-w-0 flex-1">
                       <p className="text-[9px] font-bold uppercase tracking-widest text-rose-300 mb-1">Annotation Engine Notice</p>
                       <p className="text-[10px] leading-relaxed text-rose-100/80">{errorMessage}</p>
-                      {showGroqCapacityHelp && (
-                        <a
-                          href="/groq-capacity"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-rose-200 hover:text-white transition-colors"
-                        >
-                          Learn what this means
-                          <i className="fa-solid fa-arrow-up-right-from-square"></i>
-                        </a>
-                      )}
                     </div>
                     <button
                       onClick={() => setErrorMessage(null)}
@@ -484,17 +427,6 @@ const Visualizer: React.FC = () => {
                   </div>
                   <h3 className="text-[9px] font-bold text-white uppercase tracking-widest">Neural Insights</h3>
                 </div>
-                {showGroqCapacityHelp && (
-                  <a
-                    href="/groq-capacity"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mb-3 inline-flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[8px] font-bold uppercase tracking-[0.2em] text-emerald-300 hover:bg-emerald-500/20 transition-colors"
-                  >
-                    AI capacity recovery
-                    <i className="fa-solid fa-arrow-up-right-from-square"></i>
-                  </a>
-                )}
                 <div className="text-slate-300 text-[10px] leading-relaxed prose prose-invert max-w-none font-sans max-h-[400px] overflow-y-auto custom-scrollbar">
                   {analysis.split('\n').map((line, i) => {
                   const trimmed = line.trim();
