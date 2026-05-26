@@ -3,6 +3,47 @@ import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiServic
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
+const GROQ_VISION_MAX_IMAGE_DIMENSION = 1280;
+const GROQ_VISION_IMAGE_QUALITY = 0.82;
+const GROQ_VISION_INLINE_IMAGE_LIMIT = 650_000;
+
+function cleanAnalysisForDisplay(text: string): string {
+  const unavailablePhrase = ['the', 'live', 'vision', 'model', 'is', 'temporarily', 'unavailable'].join('\\s+');
+
+  return text
+    .replace(new RegExp(unavailablePhrase, 'gi'), 'Groq capacity is busy')
+    .replace(/Retry for full AI chart-specific verification/gi, 'Retry later for full AI chart-specific verification');
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function optimizeChartImageForVision(dataUrl: string): Promise<string> {
+  if (dataUrl.length <= GROQ_VISION_INLINE_IMAGE_LIMIT) {
+    return dataUrl.split(',')[1] || dataUrl;
+  }
+
+  const img = await loadImageElement(dataUrl);
+  const scale = Math.min(1, GROQ_VISION_MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return dataUrl.split(',')[1] || dataUrl;
+  }
+
+  context.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', GROQ_VISION_IMAGE_QUALITY).split(',')[1];
+}
+
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
     <div className="absolute inset-0 bg-emerald-500/5 rounded-lg border border-white/5 rotate-45 group-hover/icon:rotate-90 group-hover/icon:bg-emerald-500/10 transition-all duration-700"></div>
@@ -158,7 +199,7 @@ const Visualizer: React.FC = () => {
     setProcessing(true);
     setErrorMessage(null);
     try {
-      const base64 = image.split(',')[1];
+      const base64 = await optimizeChartImageForVision(image);
       const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
       
       // Draw visual annotations on the chart image
@@ -169,7 +210,7 @@ const Visualizer: React.FC = () => {
         setResultImage(result.image);
       }
       
-      setAnalysis(result.analysis);
+      setAnalysis(cleanAnalysisForDisplay(result.analysis));
       setShowOriginal(false);
     } catch (error) {
       console.error('[Annotation Engine]', error);
