@@ -7,12 +7,18 @@ import StrategyBoard from './components/StrategyBoard';
 import KnowledgeBase from './components/KnowledgeBase';
 import Framework from './components/Framework';
 import MarketFeed from './components/MarketFeed';
+import GroqCapacityHelp from './components/GroqCapacityHelp';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AnalysisTab>(AnalysisTab.CHAT);
   // Default closed so the header toggle button is reachable on mobile.
   // On lg+ screens the sidebar is forced visible via `lg:translate-x-0` in Sidebar.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isGroqCapacityRoute = window.location.pathname.replace(/\/+$/, '') === '/groq-capacity';
+
+  if (isGroqCapacityRoute) {
+    return <GroqCapacityHelp />;
+  }
 
   const renderContent = () => {
     switch (activeTab) {
