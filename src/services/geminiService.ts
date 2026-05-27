@@ -1,5 +1,5 @@
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
-const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '';
+const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '/api/groq/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 const PRIMARY_VISION_MAX_TOKENS = 1536;
@@ -7,10 +7,6 @@ const VERIFICATION_MAX_TOKENS = 1024;
 const TEXT_STAGE_MAX_TOKENS = 768;
 
 function getGroqHeaders(): Record<string, string> {
-  if (!GROQ_API_URL) {
-    throw new Error('Missing Groq proxy configuration. Set VITE_GROQ_PROXY_URL.');
-  }
-
   return {
     'Content-Type': 'application/json',
   };
