@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { AnalysisTab } from './types';
 import Sidebar from './components/Sidebar';
 import TradingSage from './components/TradingSage';
@@ -8,14 +8,22 @@ import KnowledgeBase from './components/KnowledgeBase';
 import Framework from './components/Framework';
 import MarketFeed from './components/MarketFeed';
 
+const InventorySoftware = lazy(() => import('./components/InventorySoftware'));
+
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<AnalysisTab>(AnalysisTab.CHAT);
+  const [activeTab, setActiveTab] = useState<AnalysisTab>(AnalysisTab.INVENTORY);
   // Default closed so the header toggle button is reachable on mobile.
   // On lg+ screens the sidebar is forced visible via `lg:translate-x-0` in Sidebar.
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const renderContent = () => {
     switch (activeTab) {
+      case AnalysisTab.INVENTORY:
+        return (
+          <Suspense fallback={<div className="p-8 text-slate-400">Loading inventory suite...</div>}>
+            <InventorySoftware />
+          </Suspense>
+        );
       case AnalysisTab.CHAT:
         return <TradingSage />;
       case AnalysisTab.VISUALIZER:

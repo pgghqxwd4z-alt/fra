@@ -10,6 +10,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isOpen, onClose }) => {
   const menuItems = [
+    { id: AnalysisTab.INVENTORY, icon: 'fa-warehouse', label: 'Inventory Suite' },
     { id: AnalysisTab.CHAT, icon: 'fa-robot', label: 'AI Advisor' },
     { id: AnalysisTab.VISUALIZER, icon: 'fa-chart-line', label: 'Deep Visualizer' },
     { id: AnalysisTab.FRAMEWORK, icon: 'fa-layer-group', label: 'Synthesis Workflow' },

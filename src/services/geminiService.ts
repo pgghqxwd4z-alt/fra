@@ -1848,7 +1848,7 @@ IMPORTANT:
         }
 
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
-        let cleanAnalysis = analysisSource
+        const cleanAnalysis = analysisSource
           .replace(/```json[\s\S]*?```/g, '')
           .replace(/```[\s\S]*?```/g, '')
           .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
@@ -1918,7 +1918,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
               }
 
               // Clean the fallback analysis text
-              let cleanFallback = fallbackText
+              const cleanFallback = fallbackText
                 .replace(/```json[\s\S]*?```/g, '')
                 .replace(/```[\s\S]*?```/g, '')
                 .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -2090,7 +2090,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
           }
 
           // Clean the synthesis text
-          let cleanSynthesis = synthesisText
+          const cleanSynthesis = synthesisText
             .replace(/```json[\s\S]*?```/g, '')
             .replace(/```[\s\S]*?```/g, '')
             .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')

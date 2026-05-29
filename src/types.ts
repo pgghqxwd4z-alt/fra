@@ -1,5 +1,6 @@
 export enum AnalysisTab {
   CHAT = 'Chat',
+  INVENTORY = 'Inventory',
   VISUALIZER = 'Visualizer',
   STRATEGIES = 'Strategies',
   WISDOM = 'Wisdom',
