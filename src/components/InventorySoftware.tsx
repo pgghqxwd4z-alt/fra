@@ -214,7 +214,7 @@ const parseNumber = (value: unknown): number => {
 
 const isDateLike = (value: string) => {
   const trimmed = value.trim();
-  if (!trimmed) {
+  if (!trimmed || /^\d+$/.test(trimmed)) {
     return false;
   }
   return !Number.isNaN(Date.parse(trimmed)) || /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(trimmed);
@@ -255,49 +255,16 @@ const toTitleCase = (value: string) =>
     .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
     .join(' ');
 
-const splitCsvLine = (line: string) => {
-  const cells: string[] = [];
-  let current = '';
-  let quoted = false;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    const nextCharacter = line[index + 1];
-
-    if (character === '"' && nextCharacter === '"') {
-      current += '"';
-      index += 1;
-    } else if (character === '"') {
-      quoted = !quoted;
-    } else if (character === ',' && !quoted) {
-      cells.push(current.trim());
-      current = '';
-    } else {
-      current += character;
-    }
-  }
-
-  cells.push(current.trim());
-  return cells;
-};
-
 const parseCsv = (text: string): Record<string, string>[] => {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!lines.length) {
+  const workbook = XLSX.read(text, { type: 'string' });
+  const firstSheet = workbook.SheetNames[0];
+  if (!firstSheet) {
     return [];
   }
 
-  const headers = splitCsvLine(lines[0]).map((header) => header || `Column ${Math.random()}`);
-  return lines.slice(1).map((line) => {
-    const values = splitCsvLine(line);
-    return headers.reduce<Record<string, string>>((row, header, index) => {
-      row[header] = values[index] ?? '';
-      return row;
-    }, {});
+  return XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[firstSheet], {
+    defval: '',
+    raw: false,
   });
 };
 
@@ -350,9 +317,10 @@ const rowToRecord = (
   const price = parseNumber(findValue(row, headerAliases.price));
   const date = normalizeDate(findValue(row, headerAliases.date));
   const total = quantity * price;
+  const uniqueSuffix = crypto.randomUUID();
 
   return {
-    id: `${module}-${source}-${index}-${productName}`.replace(/\s+/g, '-'),
+    id: `${module}-${source}-${index}-${productName}-${uniqueSuffix}`.replace(/\s+/g, '-'),
     module,
     source,
     date,
@@ -384,7 +352,9 @@ const parseDelimitedTextRows = (text: string) => {
   }
 
   return lines.map((line) => {
-    const commaCells = line.includes(',') ? splitCsvLine(line) : line.split(/\s{2,}|\t/).filter(Boolean);
+    const commaCells = line.includes(',')
+      ? line.split(',').map((cell) => cell.trim())
+      : line.split(/\s{2,}|\t/).filter(Boolean);
     if (commaCells.length >= 3) {
       return {
         date: commaCells.find(isDateLike) ?? '',
@@ -438,7 +408,7 @@ const downloadBlob = (contents: string | Blob, filename: string, type?: string) 
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 100);
 };
 
 const summarize = (records: ParsedRecord[]) => ({
@@ -618,15 +588,39 @@ const InventorySoftware: React.FC = () => {
     const pdf = new jsPDF({ orientation: 'landscape' });
     pdf.setFontSize(16);
     pdf.text(title, 14, 16);
-    pdf.setFontSize(9);
 
-    const rows = recordsToCsv(exportRecords).split('\n');
-    rows.slice(0, 24).forEach((row, index) => {
-      pdf.text(row.slice(0, 155), 14, 28 + index * 7);
+    if (!exportRecords.length) {
+      pdf.setFontSize(10);
+      pdf.text('No records available.', 14, 30);
+      pdf.save(`${filename}.pdf`);
+      return;
+    }
+
+    const keys = Object.keys(exportRecords[0]) as Array<keyof (ParsedRecord | StockTakeRow)>;
+    const columnWidth = 270 / keys.length;
+    const formatCell = (value: unknown) => String(value ?? '').slice(0, Math.max(8, Math.floor(columnWidth / 2)));
+
+    pdf.setFontSize(7);
+    pdf.setFillColor(16, 185, 129);
+    pdf.rect(14, 22, 270, 7, 'F');
+    keys.forEach((key, index) => {
+      pdf.text(String(key).toUpperCase(), 16 + index * columnWidth, 27);
     });
 
-    if (rows.length > 24) {
-      pdf.text(`Showing first 24 of ${rows.length - 1} records. Export CSV/Excel for the complete data set.`, 14, 200);
+    exportRecords.slice(0, 24).forEach((record, rowIndex) => {
+      const y = 35 + rowIndex * 6;
+      if (rowIndex % 2 === 0) {
+        pdf.setFillColor(244, 247, 250);
+        pdf.rect(14, y - 4, 270, 6, 'F');
+      }
+      keys.forEach((key, columnIndex) => {
+        pdf.text(formatCell(record[key]), 16 + columnIndex * columnWidth, y);
+      });
+    });
+
+    if (exportRecords.length > 24) {
+      pdf.setFontSize(9);
+      pdf.text(`Showing first 24 of ${exportRecords.length} records. Export CSV/Excel for the complete data set.`, 14, 188);
     }
 
     pdf.save(`${filename}.pdf`);
