@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
-from app.main import app
+from app.main import app as proxy_app
 
-assert isinstance(app, FastAPI)
+app = FastAPI(title="QuantSage Groq Proxy Entrypoint")
+app.mount("", proxy_app)
