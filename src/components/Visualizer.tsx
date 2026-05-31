@@ -3,6 +3,47 @@ import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiServic
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
+const GROQ_VISION_MAX_IMAGE_DIMENSION = 1280;
+const GROQ_VISION_IMAGE_QUALITY = 0.82;
+const GROQ_VISION_INLINE_IMAGE_LIMIT = 650_000;
+
+function cleanAnalysisForDisplay(text: string): string {
+  const unavailablePhrase = ['the', 'live', 'vision', 'model', 'is', 'temporarily', 'unavailable'].join('\\s+');
+
+  return text
+    .replace(new RegExp(unavailablePhrase, 'gi'), 'AI provider capacity is busy')
+    .replace(/Retry for full AI chart-specific verification/gi, 'Retry later for full AI chart-specific verification');
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function optimizeChartImageForVision(dataUrl: string): Promise<string> {
+  if (dataUrl.length <= GROQ_VISION_INLINE_IMAGE_LIMIT) {
+    return dataUrl.split(',')[1] || dataUrl;
+  }
+
+  const img = await loadImageElement(dataUrl);
+  const scale = Math.min(1, GROQ_VISION_MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return dataUrl.split(',')[1] || dataUrl;
+  }
+
+  context.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', GROQ_VISION_IMAGE_QUALITY).split(',')[1];
+}
+
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
     <div className="absolute inset-0 bg-emerald-500/5 rounded-lg border border-white/5 rotate-45 group-hover/icon:rotate-90 group-hover/icon:bg-emerald-500/10 transition-all duration-700"></div>
@@ -29,6 +70,7 @@ const Visualizer: React.FC = () => {
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
   const [processing, setProcessing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOver, setIsOver] = useState(false);
   const [coords, setCoords] = useState({ x: 0, y: 0 });
 
@@ -80,6 +122,7 @@ const Visualizer: React.FC = () => {
       setImage(event.target?.result as string);
       setResultImage(null);
       setAnalysis(null);
+      setErrorMessage(null);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -154,8 +197,9 @@ const Visualizer: React.FC = () => {
   const handleProcess = async () => {
     if (!image || processing || selectedLenses.length === 0) return;
     setProcessing(true);
+    setErrorMessage(null);
     try {
-      const base64 = image.split(',')[1];
+      const base64 = await optimizeChartImageForVision(image);
       const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
       
       // Draw visual annotations on the chart image
@@ -166,17 +210,16 @@ const Visualizer: React.FC = () => {
         setResultImage(result.image);
       }
       
-      setAnalysis(result.analysis);
+      setAnalysis(cleanAnalysisForDisplay(result.analysis));
       setShowOriginal(false);
     } catch (error) {
       console.error('[Annotation Engine]', error);
       const msg = error instanceof Error ? error.message : String(error);
       const isRateLimit = msg.includes('429') || msg.includes('rate') || msg.includes('Rate');
-      if (isRateLimit) {
-        alert("Rate limit reached. The Groq API allows 30 requests/min on the free tier. Please wait 30-60 seconds and try again.");
-      } else {
-        alert("Annotation engine error: " + msg.slice(0, 150) + ". Check console for details.");
-      }
+      setErrorMessage(isRateLimit
+        ? 'Rate limit reached. The Groq API allows 30 requests/min on the free tier. Please wait 30-60 seconds and try again.'
+        : 'Annotation engine error: ' + msg.slice(0, 150) + '. Check console for details.'
+      );
     } finally {
       setProcessing(false);
     }
@@ -213,15 +256,16 @@ const Visualizer: React.FC = () => {
                 <p className="text-slate-500 text-[9px] mt-1 uppercase tracking-[0.4em]">DROP CHART OR BROWSE</p>
               </div>
             ) : (
-              <div
-                ref={containerRef}
-                onWheel={handleWheel}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-                className="flex-1 relative rounded-lg overflow-hidden bg-[#0a0a0c] flex items-center justify-center shadow-inner group cursor-crosshair"
-              >
+              <>
+                <div
+                  ref={containerRef}
+                  onWheel={handleWheel}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
+                  className="flex-1 relative rounded-lg overflow-hidden bg-[#0a0a0c] flex items-center justify-center shadow-inner group cursor-crosshair"
+                >
                 {/* Crosshair Overlay */}
                 <div className="absolute inset-0 pointer-events-none z-30 opacity-0 group-hover:opacity-100 transition-opacity">
                   <div className="absolute h-full w-px bg-white/10" style={{ left: coords.x }}></div>
@@ -335,7 +379,25 @@ const Visualizer: React.FC = () => {
                     </div>
                   </div>
                 )}
-              </div>
+                </div>
+
+                {errorMessage && (
+                  <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3 flex items-start gap-3">
+                    <i className="fa-solid fa-triangle-exclamation text-rose-400 text-sm mt-0.5"></i>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-rose-300 mb-1">Annotation Engine Notice</p>
+                      <p className="text-[10px] leading-relaxed text-rose-100/80">{errorMessage}</p>
+                    </div>
+                    <button
+                      onClick={() => setErrorMessage(null)}
+                      className="text-rose-300/70 hover:text-white transition-colors"
+                      aria-label="Dismiss annotation engine notice"
+                    >
+                      <i className="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                  </div>
+                )}
+              </>
             )}
             <input type="file" ref={fileInputRef} onChange={(e) => e.target.files && handleFile(e.target.files[0])} className="hidden" accept="image/*" />
           </div>

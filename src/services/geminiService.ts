@@ -1,5 +1,16 @@
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
+const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '/api/groq/chat/completions';
+const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const PRIMARY_VISION_MAX_TOKENS = 1536;
+const VERIFICATION_MAX_TOKENS = 1024;
+const TEXT_STAGE_MAX_TOKENS = 768;
+
+function getGroqHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+  };
+}
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
 Your knowledge base is strictly derived from:
@@ -96,8 +107,8 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
 
     // Fetch ticker + recent klines in parallel
     const [tickerRes, klinesRes] = await Promise.all([
-      fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSymbol}`).catch(() => null),
-      fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=1h&limit=50`).catch(() => null),
+      fetch(`${BINANCE_REST_URL}/ticker/24hr?symbol=${binanceSymbol}`).catch(() => null),
+      fetch(`${BINANCE_REST_URL}/klines?symbol=${binanceSymbol}&interval=1h&limit=50`).catch(() => null),
     ]);
 
     if (!tickerRes || !tickerRes.ok) return null;
@@ -123,8 +134,11 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
     const lows = candles.map(c => c.low);
     const recentHigh = highs.length ? Math.max(...highs) : null;
     const recentLow = lows.length ? Math.min(...lows) : null;
-    const pivotPoint = recentHigh && recentLow && ticker.lastPrice
-      ? ((recentHigh + recentLow + parseFloat(ticker.lastPrice)) / 3).toFixed(2)
+    const lastPrice = Number(ticker.lastPrice);
+    const hasPivotInputs = recentHigh !== null && recentLow !== null && Number.isFinite(lastPrice);
+    const pivotValue = hasPivotInputs ? (recentHigh + recentLow + lastPrice) / 3 : null;
+    const pivotPoint = pivotValue !== null
+      ? pivotValue.toFixed(2)
       : 'N/A';
 
     const keyLevels = [
@@ -136,19 +150,19 @@ async function fetchBinanceData(symbol: string): Promise<MarketDataContext | nul
       recentHigh ? `50-candle High: ${recentHigh}` : '',
       recentLow ? `50-candle Low: ${recentLow}` : '',
       `Pivot Point: ${pivotPoint}`,
-      recentHigh && recentLow && pivotPoint !== 'N/A' ? `R1: ${(2 * parseFloat(pivotPoint) - recentLow).toFixed(2)}` : '',
-      recentHigh && recentLow && pivotPoint !== 'N/A' ? `S1: ${(2 * parseFloat(pivotPoint) - recentHigh).toFixed(2)}` : '',
+      pivotValue !== null && recentLow !== null ? `R1: ${(2 * pivotValue - recentLow).toFixed(2)}` : '',
+      pivotValue !== null && recentHigh !== null ? `S1: ${(2 * pivotValue - recentHigh).toFixed(2)}` : '',
     ].filter(Boolean).join('\n');
 
     return {
       symbol: binanceSymbol,
-      currentPrice: parseFloat(ticker.lastPrice),
+      currentPrice: Number.isFinite(lastPrice) ? lastPrice : null,
       high24h: parseFloat(ticker.highPrice),
       low24h: parseFloat(ticker.lowPrice),
       volume24h: parseFloat(ticker.volume).toLocaleString(),
       recentCandles: candles.slice(-10), // Last 10 candles for validation
       keyLevels,
-      source: 'Binance API (Live)',
+      source: 'Binance Market Data API (Live)',
     };
   } catch {
     return null;
@@ -216,6 +230,47 @@ async function fetchMarketData(analysisText: string): Promise<MarketDataContext 
   if (geckoData) return geckoData;
 
   return null;
+}
+
+function buildMarketDataSection(marketData: MarketDataContext | null): string {
+  return marketData
+    ? `\n\n**EXTERNAL MARKET DATA (Live from ${marketData.source}):**
+Symbol: ${marketData.symbol}
+${marketData.keyLevels}
+${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData.recentCandles.length} candles):\n${marketData.recentCandles.slice(-5).map(c => `  ${c.time}: O=${c.open} H=${c.high} L=${c.low} C=${c.close}`).join('\n')}` : ''}
+
+**USE THIS DATA TO:**
+- Cross-reference price levels in the analysis against real market data.
+- Verify current price context and premium/discount assessment.
+- Check key round numbers, recent highs/lows, and pivot points.
+- Validate asset and timeframe correctness.`
+    : `\n\n**NOTE:** External market data could not be fetched for this asset. Rely on visual chart verification only.`;
+}
+
+function buildWebEvidenceSection(results: WebSearchResult[]): string {
+  if (results.length === 0) {
+    return '\n\n**WEB / NEWS / SENTIMENT SOURCES:** No live web/news evidence was returned. Do not invent sources; rely on the chart and market data.';
+  }
+
+  return `\n\n**WEB / NEWS / SENTIMENT SOURCES:**
+${results.slice(0, 6).map((result, index) => `${index + 1}. ${result.title}${result.url ? ` — ${result.url}` : ''}${result.snippet ? `\n   ${result.snippet}` : ''}`).join('\n')}`;
+}
+
+function buildLensResearchQuery(lens: string, symbol: string, prompt: string): string {
+  const asset = symbol || prompt || 'current market';
+  if (lens === 'smc') {
+    return `${asset} smart money concepts order blocks fair value gaps market structure institutional levels`;
+  }
+  if (lens === 'gs') {
+    return `${asset} institutional order flow liquidity levels market positioning macro catalyst`;
+  }
+  if (lens === 'psych') {
+    return `${asset} trader sentiment liquidation levels stop loss clusters market positioning`;
+  }
+  if (lens === 'ppa') {
+    return `${asset} technical analysis support resistance candlestick trend levels`;
+  }
+  return `${asset} institutional confluence technical analysis sentiment liquidity order flow`;
 }
 
 // ===== Google Search Grounding — Live News & Sentiment Verification =====
@@ -306,6 +361,7 @@ interface PipelineHealth {
 
 interface PipelineDecision {
   shouldRunValidator: boolean;
+  shouldRunVerifier: boolean;
   shouldRunKnowledgeSearch: boolean;
   shouldFetchMarketData: boolean;
   delayBeforeNextCallMs: number;
@@ -326,6 +382,7 @@ const pipelineHealth: PipelineHealth = {
     primary: { success: 0, failed: 0, avgMs: 0 },
     knowledge: { success: 0, failed: 0, avgMs: 0 },
     validator: { success: 0, failed: 0, avgMs: 0 },
+    verifier: { success: 0, failed: 0, avgMs: 0 },
     marketData: { success: 0, failed: 0, avgMs: 0 },
   }
 };
@@ -338,6 +395,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   if (pipelineHealth.apiStatus === 'down') {
     return {
       shouldRunValidator: false,
+      shouldRunVerifier: false,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: false,
       delayBeforeNextCallMs: 5000,
@@ -350,6 +408,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     const waitTime = pipelineHealth.rateLimitReset - now + 500;
     return {
       shouldRunValidator: true,
+      shouldRunVerifier: true,
       shouldRunKnowledgeSearch: false, // Skip to save quota
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: waitTime,
@@ -361,6 +420,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   if (pipelineHealth.apiStatus === 'degraded' || pipelineHealth.consecutiveFailures >= 2) {
     return {
       shouldRunValidator: pipelineHealth.consecutiveFailures < 3,
+      shouldRunVerifier: pipelineHealth.consecutiveFailures < 2,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: 3000,
@@ -377,6 +437,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
 
   return {
     shouldRunValidator: true,
+    shouldRunVerifier: true,
     shouldRunKnowledgeSearch: true,
     shouldFetchMarketData: true,
     delayBeforeNextCallMs: Math.max(5000, Math.min(optimalDelay, 8000)),
@@ -438,10 +499,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
     const start = Date.now();
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: getGroqHeaders(),
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: 'ping' }],
@@ -475,7 +533,10 @@ async function orchestratorHealthCheck(): Promise<boolean> {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown', maxTokens: number = TEXT_STAGE_MAX_TOKENS): Promise<string> {
+  const headers = getGroqHeaders();
+  let rateLimitExhausted = false;
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
@@ -484,15 +545,12 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       const timeoutId = setTimeout(() => controller.abort(), 90000);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           model,
           messages,
           temperature: 0.7,
-          max_tokens: 8192,
+          max_tokens: maxTokens,
         }),
         signal: controller.signal,
       });
@@ -507,8 +565,21 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        // Rate limited — wait and retry with exponential backoff
+        rateLimitExhausted = true;
+        const error = await response.json().catch(() => null);
+        const errorMessage = error?.error?.message || `Groq API error: ${response.status}`;
         const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
+        const normalizedError = errorMessage.toLowerCase();
+        const longCapacityWindow = retryAfter > 30000
+          || normalizedError.includes('tokens per day')
+          || normalizedError.includes('tpd')
+          || normalizedError.includes('daily')
+          || /try again in \d+m/i.test(errorMessage);
+
+        if (longCapacityWindow) {
+          throw new Error(`Groq capacity limit reached for stage "${stage}": ${errorMessage}`);
+        }
+
         const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
         await new Promise(resolve => setTimeout(resolve, backoff));
@@ -530,14 +601,19 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
     } catch (err) {
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
-      // Network error — wait and retry with longer backoff
-      const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (isGroqRateLimitOrCapacityError(errMsg) && errMsg.includes('capacity limit reached')) {
+        throw err;
+      }
+      const backoff = Math.min(3000 * Math.pow(2, attempt), 20000);
       console.warn(`[Orchestrator] ${stage} failed (attempt ${attempt + 1}/${maxRetries}): ${errMsg}. Retrying in ${backoff}ms...`);
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
   }
-  throw new Error(`Groq API: max retries exceeded for stage "${stage}"`);
+  if (rateLimitExhausted) {
+    throw new Error(`Groq API: rate limit retries exhausted for stage "${stage}"`);
+  }
+  throw new Error(`Groq API: retries exhausted for stage "${stage}"`);
 }
 
 function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
@@ -573,6 +649,177 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   }
 
   return annotations;
+}
+
+function parseVerifiedAnnotations(text: string, lens: string): { annotations: ChartAnnotation[]; parsedJson: boolean } {
+  const annotations: ChartAnnotation[] = [];
+
+  try {
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)```/);
+    if (!jsonMatch) return { annotations, parsedJson: false };
+
+    const parsed = JSON.parse(jsonMatch[1]);
+    if (!Array.isArray(parsed)) return { annotations, parsedJson: false };
+
+    for (const item of parsed) {
+      if (item.type && item.lens === lens && item.label && typeof item.yPercent === 'number') {
+        annotations.push({
+          type: item.type,
+          lens: item.lens,
+          label: item.label,
+          yPercent: Math.max(0, Math.min(100, item.yPercent)),
+          yEndPercent: item.yEndPercent != null ? Math.max(0, Math.min(100, item.yEndPercent)) : undefined,
+          xPercent: item.xPercent != null ? Math.max(0, Math.min(100, item.xPercent)) : undefined,
+          xEndPercent: item.xEndPercent != null ? Math.max(0, Math.min(100, item.xEndPercent)) : undefined,
+          direction: item.direction,
+        });
+      }
+    }
+    return { annotations, parsedJson: true };
+  } catch (e) {
+    console.warn('Failed to parse verified annotation JSON', e);
+  }
+
+  return { annotations, parsedJson: false };
+}
+
+function cleanAnalysisText(text: string): string {
+  return text
+    .replace(/```json[\s\S]*?```/g, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
+    .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
+    .replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '')
+    .replace(/^\s*\*?\*?Annotation:?\*?\*?\s*$/gm, '')
+    .replace(/^\s*#{1,6}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function isTemporaryGroqAvailabilityError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return isGroqRateLimitOrCapacityError(message)
+    || normalized.includes('timeout')
+    || normalized.includes('abort')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror');
+}
+
+function isGroqRateLimitOrCapacityError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('429')
+    || normalized.includes('rate limit')
+    || normalized.includes('rate-limit')
+    || normalized.includes('too many requests')
+    || normalized.includes('quota')
+    || normalized.includes('capacity')
+    || normalized.includes('request too large')
+    || normalized.includes('tokens per minute')
+    || normalized.includes('tokens per day')
+    || normalized.includes('tpm')
+    || normalized.includes('tpd');
+}
+
+function getFrameworkFallbackReason(errorMessage: string): string {
+  return isTemporaryGroqAvailabilityError(errorMessage)
+    ? 'AI provider capacity is busy after repeated checks.'
+    : 'AI provider capacity is busy for this request.';
+}
+
+function buildFrameworkFallbackIntro(framework: string): string {
+  return `AI provider capacity is busy, so QuantSage is showing a deterministic ${framework} framework instead of blocking the chart. Retry later for full AI chart-specific verification.`;
+}
+
+function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
+  const directive = prompt.trim() || 'Identify institutional footprints and probabilistic entry zones.';
+  const fallbackReason = getFrameworkFallbackReason(errorMessage);
+
+  if (lens === 'gs') {
+    return `**GS Analysis — Framework Fallback**
+
+_${buildFrameworkFallbackIntro('Goldman Sachs institutional-flow')}_
+
+## Institutional Flow Checklist
+- Map the dominant impulse leg first, then identify the liquidity voids left by fast displacement.
+- Treat unfilled high-volume displacement zones as candidate bank-flow rebalancing areas, not guaranteed entries.
+- Mark buy-side liquidity above obvious swing highs and sell-side liquidity below obvious swing lows.
+- Confirm any Goldman Sachs buy/sell zone only when price reacts from a liquidity pool with displacement and follow-through.
+- Invalidate the flow read if price accepts back through the origin of the displacement zone.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback status: ${fallbackReason}
+- No external source claim is asserted here because the live model call did not complete.
+
+## Execution Guidance
+- Wait for price to return to a mapped liquidity void or institutional zone.
+- Require a lower-timeframe shift before entry.
+- Keep risk outside the liquidity pool that would invalidate the institutional-flow thesis.`;
+  }
+
+  if (lens === 'smc') {
+    return `**SMC Analysis — Framework Fallback**
+
+_${buildFrameworkFallbackIntro('SMC')}_
+
+## SMC Checklist
+- Validate bullish order blocks as the last down candle before bullish displacement.
+- Validate bearish order blocks as the last up candle before bearish displacement.
+- Keep only fair value gaps with a true three-candle imbalance.
+- Mark BOS/CHoCH only at actual swing breaks.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback status: ${fallbackReason}
+- No external source claim is asserted here because the live model call did not complete.`;
+  }
+
+  if (lens === 'psych') {
+    return `**PSYCH Analysis — Framework Fallback**
+
+_${buildFrameworkFallbackIntro('trading-psychology')}_
+
+## Psychology Checklist
+- Identify where retail traders are likely trapped after a late breakout or breakdown.
+- Mark stop clusters only around obvious swing highs/lows or crowded invalidation points.
+- Avoid certainty language; every idea must remain probabilistic and risk-first.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback status: ${fallbackReason}
+- No external source claim is asserted here because the live model call did not complete.`;
+  }
+
+  if (lens === 'ppa') {
+    return `**PPA Analysis — Framework Fallback**
+
+_${buildFrameworkFallbackIntro('price-action')}_
+
+## Price Action Checklist
+- Mark support/resistance only at repeated reactions or clear role flips.
+- Confirm candlestick triggers at meaningful levels, not in the middle of noise.
+- Treat trendline breaks as actionable only after acceptance or retest.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback status: ${fallbackReason}
+- No external source claim is asserted here because the live model call did not complete.`;
+  }
+
+  return `**ISYN Analysis — Framework Fallback**
+
+_${buildFrameworkFallbackIntro('institutional-synthesis')}_
+
+## Four-Layer Checklist
+- Psychology: define risk and probabilistic expectation before trade direction.
+- Institutional Narrative: identify likely liquidity targets and displacement zones.
+- SMC Structure: validate order blocks, FVGs, BOS/CHoCH, and premium/discount.
+- Price Action Trigger: require an executable lower-timeframe confirmation.
+
+## Evidence Discipline
+- User directive: ${directive}
+- Fallback status: ${fallbackReason}
+- No external source claim is asserted here because the live model call did not complete.`;
 }
 
 function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
@@ -1088,7 +1335,7 @@ export const geminiService = {
 
       messages.push({ role: 'user', content: prompt });
 
-      const text = await callGroq(messages);
+      const text = await callGroq(messages, 'llama-3.3-70b-versatile', 3, 'chat-advisor', 1024);
 
       return { text, grounding: groundingChunks.length > 0 ? groundingChunks : undefined };
     } catch (error) {
@@ -1652,6 +1899,14 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
    - Verify annotation positions match actual chart locations.`
       };
 
+      const lensVerifierRoles: Record<string, string> = {
+        smc: `You are the dedicated SMC Corrections AI. You fully understand how the Smart Money Concepts lens works and must strictly enforce ICT/SMC definitions: valid order blocks, fair value gaps, BOS/CHoCH, mitigation state, premium/discount, and institutional buy/sell zones.`,
+        gs: `You are the dedicated Goldman Sachs Institutional Flow Corrections AI. You fully understands how the institutional narrative lens works and must strictly enforce liquidity void, absorption, stop-hunt, dark-pool/iceberg, and bank-flow logic.`,
+        psych: `You are the dedicated Douglas/Schwager Psychology Corrections AI. You fully understand the psychology lens and must strictly enforce Market Wizards, Trading in the Zone, and The Disciplined Trader principles: probability, risk-first thinking, stop clusters, pain trades, and no certainty claims.`,
+        ppa: `You are the dedicated Pure Price Action Corrections AI. You fully understand the price-action lens and must strictly enforce support/resistance, swing structure, candlestick pattern, role-flip, trendline, and trigger rules from raw chart structure only.`,
+        isyn: `You are the dedicated Institutional Synthesis Corrections AI. You fully understand the synthesis lens and must strictly enforce the four-layer workflow: Psychology → Institutional Narrative → SMC Structure → Price Action Trigger, with tiered confluence and risk-first trade planning.`
+      };
+
       // ===== PIPELINE ORCHESTRATOR: Pre-flight health check =====
       if (pipelineHealth.apiStatus === 'down') {
         console.log('[Orchestrator] API was marked down. Running health check before starting pipeline...');
@@ -1697,19 +1952,22 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               },
               {
                 type: 'text',
-                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Be EXTREMELY specific with price levels. Never say "around" or "approximately" — give exact numbers.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
+                text: 'Analyze this chart with concise institutional precision.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Give the highest-value chart-specific read only.\n- Be specific with visible levels where possible.\n- Include probability percentages for the next likely move.\n- Keep the response compact so Groq live vision can complete reliably.\n\nRESPONSE FORMAT:\n1. Provide 5-8 concise bullets for the selected lens.\n2. Add a short AI PREDICTION ENGINE section with bias, invalidation, and 1-2 targets.\n3. Then provide one JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nReturn 3-5 high-confidence annotations only.'
               }
             ]
           }
         ];
 
-        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`);
+        const analysisText = await callGroq(messages, GROQ_VISION_MODEL, 2, `primary-${lens}`, PRIMARY_VISION_MAX_TOKENS);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
-        // ===== STAGE 2: AI Validator (Orchestrator-controlled) =====
+        // ===== STAGE 2: Framework Validator (Orchestrator-controlled) =====
         // Wrapped in try/catch so primary analysis is always returned even if validation fails
         let finalAnnotations = primaryAnnotations;
         let analysisSource = analysisText;
+        let verificationMarketData: MarketDataContext | null = null;
+        let verificationKnowledgeContext = 'Knowledge search skipped by orchestrator to conserve API quota.';
+        let verificationWebEvidence: WebSearchResult[] = [];
 
         if (decision.shouldRunValidator) {
           try {
@@ -1749,7 +2007,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
+                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 1, `knowledge-${lens}`, TEXT_STAGE_MAX_TOKENS);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -1760,19 +2018,9 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
             }
 
             const [marketData, knowledgeContext] = await Promise.all(parallelTasks) as [MarketDataContext | null, string];
-
-            const externalDataSection = marketData
-              ? `\n\n**EXTERNAL MARKET DATA (Live from ${marketData.source}):**
-Symbol: ${marketData.symbol}
-${marketData.keyLevels}
-${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData.recentCandles.length} candles):\n${marketData.recentCandles.slice(-5).map(c => `  ${c.time}: O=${c.open} H=${c.high} L=${c.low} C=${c.close}`).join('\n')}` : ''}
-
-**USE THIS DATA TO:**
-- Cross-reference price levels in the analysis against real market data.
-- Verify current price context and premium/discount assessment.
-- Check key round numbers, recent highs/lows, and pivot points.
-- Validate asset and timeframe correctness.`
-              : `\n\n**NOTE:** External market data could not be fetched for this asset. Rely on visual chart verification only.`;
+            verificationMarketData = marketData;
+            verificationKnowledgeContext = knowledgeContext;
+            const externalDataSection = buildMarketDataSection(marketData);
 
             // Orchestrator-managed delay before validator call
             const validatorDelay = Math.max(decision.delayBeforeNextCallMs, 1500);
@@ -1828,7 +2076,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`);
+            const validatedText = await callGroq(validatorMessages, GROQ_VISION_MODEL, 1, `validator-${lens}`, VERIFICATION_MAX_TOKENS);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -1847,17 +2095,93 @@ IMPORTANT:
           console.log(`[Orchestrator] Skipped validator for "${lens}" — ${decision.reason}`);
         }
 
+        // ===== STAGE 3: Lens Specialist Verifier + Data Search Corrections =====
+        if (decision.shouldRunVerifier) {
+          try {
+            const symbol = verificationMarketData?.symbol || await extractSymbolFromAnalysis(analysisSource);
+            const searchQuery = buildLensResearchQuery(lens, symbol, prompt);
+            verificationWebEvidence = await fetchWebSearchResults(searchQuery);
+
+            const verifierDelay = Math.max(2000, Math.floor(decision.delayBeforeNextCallMs / 2));
+            console.log(`[Orchestrator] Waiting ${verifierDelay}ms before specialist verifier call for "${lens}"...`);
+            await new Promise(resolve => setTimeout(resolve, verifierDelay));
+
+            const verifierMessages: GroqMessage[] = [
+              {
+                role: 'system',
+                content: `${lensVerifierRoles[lens] || 'You are a strict lens specialist verification AI.'}
+
+${lensValidationRules[lens] || ''}
+
+**SPECIALIST VERIFICATION MANDATE:**
+You are the third AI for this lens. The first AI produced the lens analysis. The second validator checked chart/framework consistency. You now must fully understand this exact lens and strictly enforce its knowledge rules while using all relevant source evidence available below.
+
+You MUST:
+1. Re-check every annotation against the chart image and the lens rules above.
+2. Conduct evidence-based correction using live market data, source/news evidence, and the framework research context below.
+3. Preserve only annotations that the lens rules and evidence support.
+4. Correct wrong yPercent/xPercent placement, wrong price labels, invalid zones, unsupported certainty language, and framework violations.
+5. Add missing annotations only when the chart and evidence support them.
+6. Never invent unverifiable source claims. If external evidence is unavailable, state that chart-only verification was used.
+7. Return the final corrected analysis and final corrected JSON annotations.
+
+${buildMarketDataSection(verificationMarketData)}
+
+${buildWebEvidenceSection(verificationWebEvidence)}
+
+**FRAMEWORK RESEARCH CONTEXT:**
+${verificationKnowledgeContext}
+
+**OUTPUT FORMAT:**
+1. Start with "## Lens Specialist Verification" and summarize PASS/CORRECTED/REMOVED decisions in 5-8 bullets.
+2. Add "## Evidence Used" and list market/search sources actually used.
+3. Add the final corrected lens analysis.
+4. Finish with a JSON annotation block inside \`\`\`json ... \`\`\` fences.
+
+IMPORTANT:
+- ALL annotations must use lens "${lens}".
+- Do not return default placeholder annotations.
+- If no annotation is evidence-supported, return an empty JSON array.`
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: 'data:image/png;base64,' + base64Image
+                    }
+                  },
+                  {
+                    type: 'text',
+                    text: `**CURRENT VALIDATED ANALYSIS:**\n\n${analysisSource}\n\n**CURRENT VALIDATED ANNOTATIONS:**\n\n${JSON.stringify(finalAnnotations, null, 2)}\n\nPerform final specialist verification for lens "${lens}" and output the corrected analysis plus corrected JSON annotations.`
+                  }
+                ]
+              }
+            ];
+
+            const verifierText = await callGroq(verifierMessages, GROQ_VISION_MODEL, 1, `verifier-${lens}`, VERIFICATION_MAX_TOKENS);
+            const verifierResult = parseVerifiedAnnotations(verifierText, lens);
+            const verifierAnnotations = verifierResult.annotations;
+
+            if (verifierAnnotations.length > 0) {
+              finalAnnotations = verifierAnnotations;
+              analysisSource = verifierText;
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" finalized ${verifierAnnotations.length} annotations.`);
+            } else if (verifierResult.parsedJson) {
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" returned no supported annotations. Keeping previous validated result.`);
+            } else {
+              console.log(`[Orchestrator] Specialist verifier for "${lens}" returned no parseable JSON. Keeping previous validated result.`);
+            }
+          } catch (verificationError) {
+            console.warn(`[Orchestrator] Specialist verifier failed for lens "${lens}", using prior validated analysis:`, verificationError);
+          }
+        } else {
+          console.log(`[Orchestrator] Skipped specialist verifier for "${lens}" — ${decision.reason}`);
+        }
+
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
-        let cleanAnalysis = analysisSource
-          .replace(/```json[\s\S]*?```/g, '')
-          .replace(/```[\s\S]*?```/g, '')
-          .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
-          .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
-          .replace(/\{[^{}]*"type"\s*:\s*"[^"]*"[^{}]*\}/g, '')
-          .replace(/^\s*\*?\*?Annotation:?\*?\*?\s*$/gm, '')
-          .replace(/^\s*#{1,6}\s*$/gm, '')
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
+        const cleanAnalysis = cleanAnalysisText(analysisSource);
 
         allAnnotations.push(...finalAnnotations);
         allAnalysisParts.push(cleanAnalysis);
@@ -1865,8 +2189,8 @@ IMPORTANT:
         } catch (lensError) {
           // Individual lens failed — try text-only fallback API before giving up
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
-          const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
-          console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting text-only fallback API...`);
+          const isRateLimit = isGroqRateLimitOrCapacityError(errorMsg);
+          console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting fallback recovery...`);
 
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
           if (!isRateLimit) {
@@ -1908,7 +2232,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 3, `fallback-${lens}`);
+              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 1, `fallback-${lens}`, TEXT_STAGE_MAX_TOKENS);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -1918,7 +2242,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
               }
 
               // Clean the fallback analysis text
-              let cleanFallback = fallbackText
+              const cleanFallback = fallbackText
                 .replace(/```json[\s\S]*?```/g, '')
                 .replace(/```[\s\S]*?```/g, '')
                 .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -1928,7 +2252,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
 
               allAnalysisParts.push(
                 `**${lens.toUpperCase()} Analysis — Fallback Mode (Text-Only AI)**\n\n` +
-                `_Note: The vision model was unavailable, so this analysis is framework-based rather than chart-specific. Retry for full visual analysis._\n\n` +
+                `_Note: AI provider capacity is busy, so this analysis is framework-based rather than chart-specific. Retry later for full visual analysis._\n\n` +
                 cleanFallback
               );
 
@@ -1936,29 +2260,20 @@ Also provide a JSON annotation block with general-purpose educational annotation
               continue; // Skip the placeholder fallback below
             } catch (fallbackError) {
               console.error(`[Orchestrator] Fallback API for "${lens}" also FAILED:`, fallbackError);
-              // Fall through to placeholder annotations
+              // Fall through to deterministic framework fallback
             }
           }
 
-          // Ultimate fallback: placeholder annotations
-          console.error(`[Orchestrator] Lens "${lens}" — all APIs failed. Using placeholder annotations.`);
-          const placeholderAnnotations = generateDefaultAnnotations([lens]);
-          allAnnotations.push(...placeholderAnnotations);
-          const isNetworkError = errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('abort') || errorMsg.includes('timeout');
-          allAnalysisParts.push(
-            `**${lens.toUpperCase()} Analysis — Temporary Failure**\n\n` +
-            (isRateLimit
-              ? `The AI analysis engine is currently rate-limited. The Groq API free tier allows 30 requests per minute. Please wait 30-60 seconds and try again.\n\nDefault annotations have been placed as placeholders.`
-              : isNetworkError
-              ? `The AI analysis engine experienced a network timeout. This is usually temporary — the API may be under heavy load. Please wait a moment and retry.\n\nDefault annotations have been placed as placeholders.`
-              : `The AI analysis engine encountered an error: ${errorMsg}\n\nDefault annotations have been placed as placeholders. Please retry the analysis.`)
-          );
+          // Ultimate fallback: deterministic framework analysis instead of a Temporary Failure panel
+          console.warn(`[Orchestrator] Lens "${lens}" — API unavailable. Using framework fallback analysis.`);
+          allAnnotations.push(...generateDefaultAnnotations([lens]));
+          allAnalysisParts.push(buildFrameworkFallbackAnalysis(lens, prompt, errorMsg));
         }
       }
 
       // ===== STAGE 4: PROBABILISTIC ENTRY ANALYSIS — Institutional/Bank-Level Synthesis =====
       // This specialized AI synthesizes ALL lens outputs into actionable institutional entry zones
-      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus !== 'degraded') {
+      if (allAnalysisParts.length >= 2 && pipelineHealth.apiStatus === 'healthy') {
         try {
           console.log(`[Orchestrator] Stage 4: Probabilistic Entry Analysis — synthesizing ${allAnalysisParts.length} lens outputs...`);
           await new Promise(resolve => setTimeout(resolve, 5000)); // Cooldown before synthesis
@@ -2082,7 +2397,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
+          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 1, 'synthesis-entry', TEXT_STAGE_MAX_TOKENS);
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {
@@ -2090,7 +2405,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
           }
 
           // Clean the synthesis text
-          let cleanSynthesis = synthesisText
+          const cleanSynthesis = synthesisText
             .replace(/```json[\s\S]*?```/g, '')
             .replace(/```[\s\S]*?```/g, '')
             .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -2111,6 +2426,8 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
         }
       } else if (allAnalysisParts.length < 2) {
         console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — need 2+ lens analyses (have ${allAnalysisParts.length}).`);
+      } else {
+        console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — API status is ${pipelineHealth.apiStatus}.`);
       }
 
       // ===== ORCHESTRATOR: Post-pipeline health summary =====
