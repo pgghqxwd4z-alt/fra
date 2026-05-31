@@ -722,12 +722,12 @@ function isGroqRateLimitOrCapacityError(message: string): boolean {
 
 function getFrameworkFallbackReason(errorMessage: string): string {
   return isTemporaryGroqAvailabilityError(errorMessage)
-    ? 'Groq capacity is busy after repeated checks.'
-    : 'Groq capacity is busy for this request.';
+    ? 'AI provider capacity is busy after repeated checks.'
+    : 'AI provider capacity is busy for this request.';
 }
 
 function buildFrameworkFallbackIntro(framework: string): string {
-  return `Groq capacity is busy, so QuantSage is showing a deterministic ${framework} framework instead of blocking the chart. Retry later for full AI chart-specific verification.`;
+  return `AI provider capacity is busy, so QuantSage is showing a deterministic ${framework} framework instead of blocking the chart. Retry later for full AI chart-specific verification.`;
 }
 
 function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
@@ -2252,7 +2252,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
 
               allAnalysisParts.push(
                 `**${lens.toUpperCase()} Analysis — Fallback Mode (Text-Only AI)**\n\n` +
-                `_Note: Groq capacity is busy, so this analysis is framework-based rather than chart-specific. Retry later for full visual analysis._\n\n` +
+                `_Note: AI provider capacity is busy, so this analysis is framework-based rather than chart-specific. Retry later for full visual analysis._\n\n` +
                 cleanFallback
               );
 

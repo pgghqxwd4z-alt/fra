@@ -11,7 +11,7 @@ function cleanAnalysisForDisplay(text: string): string {
   const unavailablePhrase = ['the', 'live', 'vision', 'model', 'is', 'temporarily', 'unavailable'].join('\\s+');
 
   return text
-    .replace(new RegExp(unavailablePhrase, 'gi'), 'Groq capacity is busy')
+    .replace(new RegExp(unavailablePhrase, 'gi'), 'AI provider capacity is busy')
     .replace(/Retry for full AI chart-specific verification/gi, 'Retry later for full AI chart-specific verification');
 }
 

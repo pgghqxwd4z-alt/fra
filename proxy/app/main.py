@@ -16,6 +16,9 @@ OPENAI_VISION_FALLBACK_MODEL = "gpt-4o"
 OPENAI_TEXT_FALLBACK_MODEL = "gpt-4o-mini"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "").strip().lower() or (
+    "openai" if OPENAI_API_KEY else "groq"
+)
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -38,7 +41,9 @@ async def health() -> dict[str, bool]:
     return {
         "ok": True,
         "groq_configured": bool(GROQ_API_KEY),
+        "openai_configured": bool(OPENAI_API_KEY),
         "openai_fallback_configured": bool(OPENAI_API_KEY),
+        "openai_primary": AI_PRIMARY_PROVIDER == "openai",
     }
 
 
@@ -77,13 +82,48 @@ def map_openai_payload(payload: dict) -> dict:
 
 @app.post("/api/groq/chat/completions")
 async def groq_chat_completions(request: Request) -> JSONResponse:
-    if not GROQ_API_KEY:
+    if AI_PRIMARY_PROVIDER == "openai":
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=500, detail="Server missing OPENAI_API_KEY")
+    elif not GROQ_API_KEY:
         raise HTTPException(status_code=500, detail="Server missing GROQ_API_KEY")
 
     payload = await request.json()
     timeout = httpx.Timeout(95.0, connect=15.0)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
+        if AI_PRIMARY_PROVIDER == "openai":
+            try:
+                response = await client.post(
+                    OPENAI_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=map_openai_payload(payload),
+                )
+                try:
+                    content = response.json()
+                except ValueError:
+                    content = {"error": {"message": response.text or "OpenAI returned a non-JSON response"}}
+            except httpx.TimeoutException as exc:
+                raise HTTPException(status_code=504, detail="OpenAI request timed out") from exc
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
+
+            passthrough_headers = {
+                name: value
+                for name, value in response.headers.items()
+                if name.lower().startswith("x-ratelimit-") or name.lower() == "retry-after"
+            }
+            passthrough_headers["x-quantsage-ai-provider"] = "openai-primary"
+
+            return JSONResponse(
+                status_code=response.status_code,
+                content=content,
+                headers=passthrough_headers,
+            )
+
         try:
             groq_response = await client.post(
                 GROQ_API_URL,

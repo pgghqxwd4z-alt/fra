@@ -3,6 +3,9 @@ primary_region = "iad"
 
 [build]
 
+[env]
+  AI_PRIMARY_PROVIDER = "openai"
+
 [http_service]
   auto_start_machines = true
   auto_stop_machines = true
