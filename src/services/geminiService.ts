@@ -1,5 +1,10 @@
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODELS = {
+  vision: import.meta.env.VITE_GROQ_VISION_MODEL || 'qwen/qwen3.6-27b',
+  text: import.meta.env.VITE_GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
+  fast: import.meta.env.VITE_GROQ_FAST_MODEL || 'openai/gpt-oss-20b',
+} as const;
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
 Your knowledge base is strictly derived from:
@@ -443,9 +448,10 @@ async function orchestratorHealthCheck(): Promise<boolean> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: GROQ_MODELS.text,
         messages: [{ role: 'user', content: 'ping' }],
         max_tokens: 5,
+        ...(isReasoningModel(GROQ_MODELS.text) ? { reasoning_format: 'hidden' } : {}),
       }),
     });
     const duration = Date.now() - start;
@@ -474,8 +480,16 @@ async function orchestratorHealthCheck(): Promise<boolean> {
   }
 }
 
+function isReasoningModel(model: string): boolean {
+  return model.startsWith('qwen/') || model.startsWith('openai/gpt-oss-');
+}
+
+function stripLeadingThinkBlock(content: string): string {
+  return content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim();
+}
+
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+async function callGroq(messages: GroqMessage[], model: string = GROQ_MODELS.text, maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
@@ -493,6 +507,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
           messages,
           temperature: 0.7,
           max_tokens: 8192,
+          ...(isReasoningModel(model) ? { reasoning_format: 'hidden' } : {}),
         }),
         signal: controller.signal,
       });
@@ -526,7 +541,7 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       console.log(`[Orchestrator] ${stage} completed in ${duration}ms. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
 
       const data = await response.json();
-      return data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
+      return stripLeadingThinkBlock(data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.");
     } catch (err) {
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
@@ -1703,7 +1718,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
           }
         ];
 
-        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`);
+        const analysisText = await callGroq(messages, GROQ_MODELS.vision, 3, `primary-${lens}`);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: AI Validator (Orchestrator-controlled) =====
@@ -1749,7 +1764,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
+                  return await callGroq(knowledgeMessages, GROQ_MODELS.text, 2, `knowledge-${lens}`);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -1828,7 +1843,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`);
+            const validatedText = await callGroq(validatorMessages, GROQ_MODELS.vision, 3, `validator-${lens}`);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -1848,7 +1863,7 @@ IMPORTANT:
         }
 
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
-        let cleanAnalysis = analysisSource
+        const cleanAnalysis = analysisSource
           .replace(/```json[\s\S]*?```/g, '')
           .replace(/```[\s\S]*?```/g, '')
           .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
@@ -1871,7 +1886,7 @@ IMPORTANT:
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
           if (!isRateLimit) {
             try {
-              console.log(`[Orchestrator] Fallback API for "${lens}": Using fast llama-3.1-8b-instant (text-only)...`);
+              console.log(`[Orchestrator] Fallback API for "${lens}": Using fast ${GROQ_MODELS.fast} (text-only)...`);
               await new Promise(resolve => setTimeout(resolve, 5000)); // 5s cooldown to let API recover
 
               const fallbackMessages: GroqMessage[] = [
@@ -1908,7 +1923,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 3, `fallback-${lens}`);
+              const fallbackText = await callGroq(fallbackMessages, GROQ_MODELS.fast, 3, `fallback-${lens}`);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -1918,7 +1933,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
               }
 
               // Clean the fallback analysis text
-              let cleanFallback = fallbackText
+              const cleanFallback = fallbackText
                 .replace(/```json[\s\S]*?```/g, '')
                 .replace(/```[\s\S]*?```/g, '')
                 .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -2082,7 +2097,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
+          const synthesisText = await callGroq(synthesisMessages, GROQ_MODELS.text, 2, 'synthesis-entry');
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {
@@ -2090,7 +2105,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
           }
 
           // Clean the synthesis text
-          let cleanSynthesis = synthesisText
+          const cleanSynthesis = synthesisText
             .replace(/```json[\s\S]*?```/g, '')
             .replace(/```[\s\S]*?```/g, '')
             .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
