@@ -31,13 +31,12 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#050507] text-gray-200 overflow-hidden font-sans selection:bg-emerald-500/30">
-      {sidebarOpen && (
-        <Sidebar 
-          activeTab={activeTab} 
-          onTabChange={setActiveTab} 
-          isOpen={sidebarOpen} 
-        />
-      )}
+      <Sidebar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
       
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         <header className="h-12 border-b border-white/5 flex items-center justify-between bg-[#050507]/80 backdrop-blur-xl z-40 shrink-0">
@@ -77,7 +76,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex-1 relative overflow-hidden p-2 bg-[radial-gradient(circle_at_50%_0%,_rgba(16,185,129,0.03)_0%,_transparent_50%)]">
+        <div className="flex-1 relative overflow-y-auto p-2 bg-[radial-gradient(circle_at_50%_0%,_rgba(16,185,129,0.03)_0%,_transparent_50%)]">
           <div className="h-full w-full">
             {renderContent()}
           </div>
