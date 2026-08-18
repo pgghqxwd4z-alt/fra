@@ -1,0 +1,11 @@
+{
+  "name": "QuantSage Institutional Forecast Terminal",
+  "description": "Advanced institutional trading intelligence platform synthesizing SMC, Price Action, and elite psychological frameworks with Gemini-powered market forecasting.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
