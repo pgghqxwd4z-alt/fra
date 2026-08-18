@@ -65,14 +65,38 @@ function loadHistory(): SavedSimulation[] {
     const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
     const parsed = saved ? JSON.parse(saved) : [];
     return Array.isArray(parsed)
-      ? parsed.filter(entry => entry && typeof entry === 'object' && entry.result && Array.isArray(entry.result.equityCurves))
+      ? parsed.filter(entry => {
+        if (!entry || typeof entry !== 'object') return false;
+        const candidate = entry as Record<string, unknown>;
+        const result = candidate.result;
+        const params = candidate.params;
+        const simulationParams = params as Record<string, unknown> | null;
+        return typeof candidate.id === 'string' &&
+          typeof candidate.strategyId === 'string' &&
+          typeof candidate.strategyName === 'string' &&
+          typeof candidate.timestamp === 'number' &&
+          result !== null &&
+          typeof result === 'object' &&
+          Array.isArray((result as Record<string, unknown>).equityCurves) &&
+          params !== null &&
+          typeof params === 'object' &&
+          typeof simulationParams?.winProb === 'number' &&
+          typeof simulationParams?.rewardRisk === 'number' &&
+          typeof simulationParams?.riskPerTrade === 'number' &&
+          typeof simulationParams?.sampleSize === 'number' &&
+          typeof simulationParams?.initialBalance === 'number';
+      })
       : [];
   } catch { return []; }
 }
 
-function saveHistory(history: SavedSimulation[]) {
+function saveHistory(strategyId: string, strategyHistory: SavedSimulation[]) {
   try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(0, 20)));
+    const otherStrategies = loadHistory().filter(entry => entry.strategyId !== strategyId);
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify([
+      ...strategyHistory.slice(0, 20),
+      ...otherStrategies,
+    ]));
   } catch { /* storage full or unavailable */ }
 }
 
@@ -169,10 +193,15 @@ function parseTradePnlValues(text: string): number[] {
 
   const parseValue = (value: string): number | null => {
     const normalized = value.trim().replace(/[$€£,\s]/g, '');
-    if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)%?$/.test(normalized)) return null;
-    const parsed = Number(normalized.replace('%', ''));
+    if (normalized.endsWith('%')) return null;
+    if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) return null;
+    const parsed = Number(normalized);
     return Number.isFinite(parsed) ? parsed : null;
   };
+
+  if (lines.some(line => line.split(/[;,]/).some(value => value.trim().endsWith('%')))) {
+    return [];
+  }
 
   return lines.slice(startAt).reduce<number[]>((values, line) => {
     const parts = line.split(/[;,]/);
@@ -267,8 +296,8 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
   }, [strategy.id]);
 
   useEffect(() => {
-    setHistory(loadHistory());
-  }, []);
+    setHistory(loadHistory().filter(entry => entry.strategyId === strategy.id));
+  }, [strategy.id]);
 
   const runBacktest = useCallback(() => {
     setRunning(true);
@@ -319,7 +348,7 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
     };
     const updatedHistory = [entry, ...history].slice(0, 20);
     setHistory(updatedHistory);
-    saveHistory(updatedHistory);
+    saveHistory(strategy.id, updatedHistory);
   };
 
   const loadFromHistory = (entry: SavedSimulation) => {
@@ -336,7 +365,7 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
   const deleteFromHistory = (id: string) => {
     const updatedHistory = history.filter(entry => entry.id !== id);
     setHistory(updatedHistory);
-    saveHistory(updatedHistory);
+    saveHistory(strategy.id, updatedHistory);
   };
 
   return (
