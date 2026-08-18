@@ -9,6 +9,7 @@ const GROQ_TPM_LIMIT = readPositiveEnvNumber(import.meta.env.VITE_GROQ_TPM_LIMIT
 const GROQ_TPM_SAFETY_MARGIN = 300;
 const GROQ_MAX_TOKENS_FLOOR = 800;
 const GROQ_MAX_TOKENS_CAP = 4096;
+const GROQ_HEALTHCHECK_MAX_TOKENS = 64;
 const GROQ_FORCE_FULL_PIPELINE = import.meta.env.VITE_GROQ_FORCE_FULL_PIPELINE === 'true';
 const GROQ_LOW_CAPACITY_MODE = GROQ_TPM_LIMIT <= 10000 && !GROQ_FORCE_FULL_PIPELINE;
 const groqTokenReservations: { timestamp: number; reservedTokens: number }[] = [];
@@ -547,8 +548,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
     const start = Date.now();
     const healthMessages: GroqMessage[] = [{ role: 'user', content: 'ping' }];
     const promptEstimate = estimateGroqPromptTokens(healthMessages);
-    const maxTokens = getMaxTokensForPrompt(promptEstimate);
-    await reserveGroqTokens(promptEstimate, Math.min(maxTokens, GROQ_MAX_TOKENS_FLOOR), 'healthcheck');
+    await reserveGroqTokens(promptEstimate, GROQ_HEALTHCHECK_MAX_TOKENS, 'healthcheck');
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
       headers: {
@@ -558,7 +558,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
       body: JSON.stringify({
         model: GROQ_MODELS.text,
         messages: healthMessages,
-        max_tokens: Math.min(maxTokens, GROQ_MAX_TOKENS_FLOOR),
+        max_tokens: GROQ_HEALTHCHECK_MAX_TOKENS,
         ...getReasoningOptions(GROQ_MODELS.text),
       }),
     });

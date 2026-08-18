@@ -90,14 +90,30 @@ function loadHistory(): SavedSimulation[] {
   } catch { return []; }
 }
 
-function saveHistory(strategyId: string, strategyHistory: SavedSimulation[]) {
+function saveHistory(strategyId: string, strategyHistory: SavedSimulation[]): SavedSimulation[] | null {
+  const otherStrategies = loadHistory().filter(entry => entry.strategyId !== strategyId);
+  const pendingHistory = [...strategyHistory.slice(0, 20), ...otherStrategies];
+
+  while (pendingHistory.length > 0) {
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(pendingHistory));
+      return pendingHistory;
+    } catch {
+      const oldestIndex = pendingHistory.reduce(
+        (oldest, entry, index) => entry.timestamp < pendingHistory[oldest].timestamp ? index : oldest,
+        0
+      );
+      pendingHistory.splice(oldestIndex, 1);
+    }
+  }
+
   try {
-    const otherStrategies = loadHistory().filter(entry => entry.strategyId !== strategyId);
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify([
-      ...strategyHistory.slice(0, 20),
-      ...otherStrategies,
-    ]));
-  } catch { /* storage full or unavailable */ }
+    localStorage.setItem(HISTORY_STORAGE_KEY, '[]');
+    return [];
+  } catch {
+    window.alert('Could not save backtest history. Your current history was not changed.');
+    return null;
+  }
 }
 
 function runMonteCarloSimulation(
@@ -186,7 +202,38 @@ function parseTradePnlValues(text: string): number[] {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   if (lines.length === 0) return [];
 
-  const firstRow = lines[0].split(/[;,]/).map(value => value.trim().toLowerCase());
+  const delimiter = lines[0].includes('\t')
+    ? '\t'
+    : lines[0].includes(';')
+      ? ';'
+      : ',';
+  const tokenizeRow = (line: string): string[] => {
+    const values: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let index = 0; index < line.length; index++) {
+      const character = line[index];
+      if (character === '"') {
+        if (inQuotes && line[index + 1] === '"') {
+          current += '"';
+          index++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (character === delimiter && !inQuotes) {
+        values.push(current.trim());
+        current = '';
+      } else {
+        current += character;
+      }
+    }
+
+    values.push(current.trim());
+    return values;
+  };
+
+  const firstRow = tokenizeRow(lines[0]).map(value => value.toLowerCase());
   const pnlColumn = firstRow.findIndex(value => /pnl|profit|return|result|gain|loss|amount/.test(value));
   const startAt = pnlColumn >= 0 ? 1 : 0;
   const column = pnlColumn >= 0 ? pnlColumn : 0;
@@ -199,17 +246,14 @@ function parseTradePnlValues(text: string): number[] {
     return Number.isFinite(parsed) ? parsed : null;
   };
 
-  if (lines.some(line => line.split(/[;,]/).some(value => value.trim().endsWith('%')))) {
+  if (lines.slice(startAt).some(line => tokenizeRow(line)[column]?.trim().endsWith('%'))) {
     return [];
   }
 
   return lines.slice(startAt).reduce<number[]>((values, line) => {
-    const parts = line.split(/[;,]/);
+    const parts = tokenizeRow(line);
     const selected = parseValue(parts[column] ?? '');
-    const fallback = selected === null
-      ? parts.map(parseValue).find(value => value !== null) ?? null
-      : selected;
-    if (fallback !== null) values.push(fallback);
+    if (selected !== null) values.push(selected);
     return values;
   }, []);
 }
@@ -347,8 +391,10 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
       params: { winProb, rewardRisk, riskPerTrade, sampleSize, initialBalance },
     };
     const updatedHistory = [entry, ...history].slice(0, 20);
-    setHistory(updatedHistory);
-    saveHistory(strategy.id, updatedHistory);
+    const persistedHistory = saveHistory(strategy.id, updatedHistory);
+    if (persistedHistory) {
+      setHistory(persistedHistory.filter(item => item.strategyId === strategy.id));
+    }
   };
 
   const loadFromHistory = (entry: SavedSimulation) => {
@@ -364,8 +410,10 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
 
   const deleteFromHistory = (id: string) => {
     const updatedHistory = history.filter(entry => entry.id !== id);
-    setHistory(updatedHistory);
-    saveHistory(strategy.id, updatedHistory);
+    const persistedHistory = saveHistory(strategy.id, updatedHistory);
+    if (persistedHistory) {
+      setHistory(persistedHistory.filter(item => item.strategyId === strategy.id));
+    }
   };
 
   return (
