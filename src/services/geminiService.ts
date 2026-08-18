@@ -5,6 +5,18 @@ const GROQ_MODELS = {
   text: import.meta.env.VITE_GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
   fast: import.meta.env.VITE_GROQ_FAST_MODEL || 'openai/gpt-oss-20b',
 } as const;
+const GROQ_TPM_LIMIT = readPositiveEnvNumber(import.meta.env.VITE_GROQ_TPM_LIMIT, 8000);
+const GROQ_TPM_SAFETY_MARGIN = 300;
+const GROQ_MAX_TOKENS_FLOOR = 800;
+const GROQ_MAX_TOKENS_CAP = 4096;
+const GROQ_FORCE_FULL_PIPELINE = import.meta.env.VITE_GROQ_FORCE_FULL_PIPELINE === 'true';
+const GROQ_LOW_CAPACITY_MODE = GROQ_TPM_LIMIT <= 10000 && !GROQ_FORCE_FULL_PIPELINE;
+const groqTokenReservations: { timestamp: number; reservedTokens: number }[] = [];
+
+function readPositiveEnvNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
 Your knowledge base is strictly derived from:
@@ -60,6 +72,88 @@ interface GroqContentPart {
   image_url?: {
     url: string;
   };
+}
+
+function estimateGroqPromptTokens(messages: GroqMessage[]): number {
+  let textCharacters = 0;
+  let imageTokens = 0;
+
+  for (const message of messages) {
+    if (typeof message.content === 'string') {
+      textCharacters += message.content.length;
+      continue;
+    }
+
+    for (const part of message.content) {
+      if (part.type === 'text') {
+        textCharacters += part.text?.length || 0;
+      } else {
+        const imageUrl = part.image_url?.url || '';
+        const base64Payload = imageUrl.split('base64,')[1] || '';
+        imageTokens += Math.max(256, Math.ceil(base64Payload.length / 16));
+      }
+    }
+  }
+
+  return Math.max(1, Math.ceil(textCharacters / 4) + imageTokens);
+}
+
+function getMaxTokensForPrompt(promptEstimate: number): number {
+  const available = GROQ_TPM_LIMIT - promptEstimate - GROQ_TPM_SAFETY_MARGIN;
+  if (available < GROQ_MAX_TOKENS_FLOOR) {
+    throw new Error(
+      `Groq request cannot fit within the ${GROQ_TPM_LIMIT}-token budget (estimated prompt: ${promptEstimate} tokens).`
+    );
+  }
+  return Math.min(GROQ_MAX_TOKENS_CAP, Math.max(GROQ_MAX_TOKENS_FLOOR, Math.floor(available)));
+}
+
+async function reserveGroqTokens(
+  promptEstimate: number,
+  maxTokens: number,
+  stage: string
+): Promise<{ timestamp: number; reservedTokens: number }> {
+  const reservedTokens = promptEstimate + maxTokens;
+  if (reservedTokens > GROQ_TPM_LIMIT) {
+    throw new Error(`Groq ${stage} request exceeds the ${GROQ_TPM_LIMIT}-token budget.`);
+  }
+
+  while (true) {
+    const now = Date.now();
+    while (groqTokenReservations.length > 0 && groqTokenReservations[0].timestamp <= now - 60000) {
+      groqTokenReservations.shift();
+    }
+
+    const reservedInWindow = groqTokenReservations.reduce((total, entry) => total + entry.reservedTokens, 0);
+    if (reservedInWindow + reservedTokens <= GROQ_TPM_LIMIT) {
+      const reservation = { timestamp: now, reservedTokens };
+      groqTokenReservations.push(reservation);
+      return reservation;
+    }
+
+    const oldestReservation = groqTokenReservations[0];
+    const waitMs = Math.max(250, oldestReservation.timestamp + 60000 - now);
+    console.log(
+      `[Orchestrator] Token budget queueing ${stage}: ${reservedInWindow}/${GROQ_TPM_LIMIT} reserved. Waiting ${Math.ceil(waitMs / 1000)}s.`
+    );
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+  }
+}
+
+function releaseGroqTokens(reservation: { timestamp: number; reservedTokens: number }): void {
+  const index = groqTokenReservations.indexOf(reservation);
+  if (index >= 0) groqTokenReservations.splice(index, 1);
+}
+
+function parseRetryDelayMs(response: Response, body: string): number {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(250, Math.ceil(seconds * 1000));
+  }
+
+  const match = body.match(/try again in\s+([\d.]+)\s*s/i);
+  return match ? Math.max(250, Math.ceil(Number(match[1]) * 1000)) : 3000;
 }
 
 // ===== External Data Search Functions =====
@@ -350,6 +444,16 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     };
   }
 
+  if (GROQ_LOW_CAPACITY_MODE) {
+    return {
+      shouldRunValidator: false,
+      shouldRunKnowledgeSearch: false,
+      shouldFetchMarketData: true,
+      delayBeforeNextCallMs: 0,
+      reason: `Low-capacity mode (${GROQ_TPM_LIMIT} TPM) — skipping optional validator and knowledge stages.`
+    };
+  }
+
   // If we're rate limited, calculate needed delay
   if (pipelineHealth.rateLimitRemaining <= 2 && pipelineHealth.rateLimitReset > now) {
     const waitTime = pipelineHealth.rateLimitReset - now + 500;
@@ -441,6 +545,10 @@ function orchestratorRecordCall(stage: string, durationMs: number, success: bool
 async function orchestratorHealthCheck(): Promise<boolean> {
   try {
     const start = Date.now();
+    const healthMessages: GroqMessage[] = [{ role: 'user', content: 'ping' }];
+    const promptEstimate = estimateGroqPromptTokens(healthMessages);
+    const maxTokens = getMaxTokensForPrompt(promptEstimate);
+    await reserveGroqTokens(promptEstimate, Math.min(maxTokens, GROQ_MAX_TOKENS_FLOOR), 'healthcheck');
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
       headers: {
@@ -449,9 +557,9 @@ async function orchestratorHealthCheck(): Promise<boolean> {
       },
       body: JSON.stringify({
         model: GROQ_MODELS.text,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 5,
-        ...(isReasoningModel(GROQ_MODELS.text) ? { reasoning_format: 'hidden' } : {}),
+        messages: healthMessages,
+        max_tokens: Math.min(maxTokens, GROQ_MAX_TOKENS_FLOOR),
+        ...getReasoningOptions(GROQ_MODELS.text),
       }),
     });
     const duration = Date.now() - start;
@@ -463,7 +571,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
     if (response.ok) {
       pipelineHealth.apiStatus = 'healthy';
       pipelineHealth.consecutiveFailures = 0;
-      console.log('[Orchestrator] Health check PASSED. API is healthy.');
+      console.log(`[Orchestrator] Health check PASSED. API is healthy with ${GROQ_TPM_LIMIT} TPM capacity.`);
       return true;
     }
     if (response.status === 429) {
@@ -484,15 +592,28 @@ function isReasoningModel(model: string): boolean {
   return model.startsWith('qwen/') || model.startsWith('openai/gpt-oss-');
 }
 
+function getReasoningOptions(model: string): Record<string, string> {
+  if (!isReasoningModel(model)) return {};
+  return {
+    reasoning_format: 'hidden',
+    reasoning_effort: model.startsWith('qwen/') ? 'none' : 'low',
+  };
+}
+
 function stripLeadingThinkBlock(content: string): string {
   return content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim();
 }
 
 // Enhanced callGroq with orchestrator monitoring
 async function callGroq(messages: GroqMessage[], model: string = GROQ_MODELS.text, maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+  const promptEstimate = estimateGroqPromptTokens(messages);
+  let maxTokens = getMaxTokensForPrompt(promptEstimate);
+  let oversizeRetryUsed = false;
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
+      const reservation = await reserveGroqTokens(promptEstimate, maxTokens, stage);
       // Add 90-second timeout to prevent hanging requests
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000);
@@ -506,8 +627,8 @@ async function callGroq(messages: GroqMessage[], model: string = GROQ_MODELS.tex
           model,
           messages,
           temperature: 0.7,
-          max_tokens: 8192,
-          ...(isReasoningModel(model) ? { reasoning_format: 'hidden' } : {}),
+          max_tokens: maxTokens,
+          ...getReasoningOptions(model),
         }),
         signal: controller.signal,
       });
@@ -522,18 +643,42 @@ async function callGroq(messages: GroqMessage[], model: string = GROQ_MODELS.tex
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        // Rate limited — wait and retry with exponential backoff
-        const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
-        const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
+        const body = await response.text();
+        if (attempt === maxRetries - 1) {
+          throw new Error(`Groq API rate limited on ${stage}: ${body || 'retry limit reached'}`);
+        }
+        const backoff = parseRetryDelayMs(response, body);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
         await new Promise(resolve => setTimeout(resolve, backoff));
         continue;
       }
 
+      if (response.status === 413) {
+        const body = await response.text();
+        orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
+        if (!oversizeRetryUsed && maxTokens > GROQ_MAX_TOKENS_FLOOR) {
+          releaseGroqTokens(reservation);
+          oversizeRetryUsed = true;
+          maxTokens = GROQ_MAX_TOKENS_FLOOR;
+          console.warn(`[Orchestrator] Request too large on ${stage}. Retrying once with max_tokens=${maxTokens}.`);
+          continue;
+        }
+        const error = new Error(`Groq request too large for ${stage}: ${body || 'payload exceeds model limits'}`) as Error & { nonRetryable?: boolean };
+        error.nonRetryable = true;
+        throw error;
+      }
+
       if (!response.ok) {
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        const error = await response.json();
-        throw new Error(error.error?.message || `Groq API error: ${response.status}`);
+        const body = await response.text();
+        let message = `Groq API error: ${response.status}`;
+        try {
+          const parsed = JSON.parse(body);
+          message = parsed.error?.message || message;
+        } catch {
+          if (body) message = body;
+        }
+        throw new Error(message);
       }
 
       const duration = Date.now() - start;
@@ -543,6 +688,9 @@ async function callGroq(messages: GroqMessage[], model: string = GROQ_MODELS.tex
       const data = await response.json();
       return stripLeadingThinkBlock(data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.");
     } catch (err) {
+      if (typeof err === 'object' && err !== null && (err as { nonRetryable?: boolean }).nonRetryable) {
+        throw err;
+      }
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
       // Network error — wait and retry with longer backoff
