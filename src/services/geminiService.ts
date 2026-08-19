@@ -75,7 +75,16 @@ interface GroqContentPart {
   };
 }
 
-function estimateGroqPromptTokens(messages: GroqMessage[]): number {
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+interface ModelImageInfo extends ImageDimensions {
+  mimeType: string;
+}
+
+function estimateGroqPromptTokens(messages: GroqMessage[], imageDimensions?: ImageDimensions): number {
   let textCharacters = 0;
   let imageTokens = 0;
 
@@ -89,9 +98,9 @@ function estimateGroqPromptTokens(messages: GroqMessage[]): number {
       if (part.type === 'text') {
         textCharacters += part.text?.length || 0;
       } else {
-        const imageUrl = part.image_url?.url || '';
-        const base64Payload = imageUrl.split('base64,')[1] || '';
-        imageTokens += Math.max(256, Math.ceil(base64Payload.length / 16));
+        const width = imageDimensions?.width || 1024;
+        const height = imageDimensions?.height || 1024;
+        imageTokens += Math.min(4096, Math.max(256, Math.ceil((width * height) / 256)));
       }
     }
   }
@@ -445,21 +454,11 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     };
   }
 
-  if (GROQ_LOW_CAPACITY_MODE) {
-    return {
-      shouldRunValidator: false,
-      shouldRunKnowledgeSearch: false,
-      shouldFetchMarketData: true,
-      delayBeforeNextCallMs: 0,
-      reason: `Low-capacity mode (${GROQ_TPM_LIMIT} TPM) — skipping optional validator and knowledge stages.`
-    };
-  }
-
   // If we're rate limited, calculate needed delay
   if (pipelineHealth.rateLimitRemaining <= 2 && pipelineHealth.rateLimitReset > now) {
     const waitTime = pipelineHealth.rateLimitReset - now + 500;
     return {
-      shouldRunValidator: true,
+      shouldRunValidator: !GROQ_LOW_CAPACITY_MODE,
       shouldRunKnowledgeSearch: false, // Skip to save quota
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: waitTime,
@@ -470,7 +469,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   // If degraded (high failure rate), run conservatively
   if (pipelineHealth.apiStatus === 'degraded' || pipelineHealth.consecutiveFailures >= 2) {
     return {
-      shouldRunValidator: pipelineHealth.consecutiveFailures < 3,
+      shouldRunValidator: !GROQ_LOW_CAPACITY_MODE && pipelineHealth.consecutiveFailures < 3,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: 3000,
@@ -533,6 +532,16 @@ function orchestratorRecordCall(stage: string, durationMs: number, success: bool
     } else {
       sh.failed++;
     }
+  }
+
+  if (GROQ_LOW_CAPACITY_MODE) {
+    return {
+      shouldRunValidator: false,
+      shouldRunKnowledgeSearch: false,
+      shouldFetchMarketData: true,
+      delayBeforeNextCallMs: 0,
+      reason: `Low-capacity mode (${GROQ_TPM_LIMIT} TPM) — skipping optional validator and knowledge stages.`
+    };
   }
 
   // Update overall average response time
@@ -605,9 +614,28 @@ function stripLeadingThinkBlock(content: string): string {
 }
 
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = GROQ_MODELS.text, maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
-  const promptEstimate = estimateGroqPromptTokens(messages);
-  let maxTokens = getMaxTokensForPrompt(promptEstimate);
+async function callGroq(
+  messages: GroqMessage[],
+  model: string = GROQ_MODELS.text,
+  maxRetries: number = 3,
+  stage: string = 'unknown',
+  imageDimensions?: ImageDimensions
+): Promise<string> {
+  const promptEstimate = estimateGroqPromptTokens(messages, imageDimensions);
+  let maxTokens: number;
+  try {
+    maxTokens = getMaxTokensForPrompt(promptEstimate);
+  } catch (error) {
+    const containsImage = messages.some(message =>
+      Array.isArray(message.content) && message.content.some(part => part.type === 'image_url')
+    );
+    if (containsImage) {
+      throw new Error(
+        `Chart image is too large for the Groq token budget after resizing (estimated prompt: ${promptEstimate} tokens). Please use a smaller chart image.`
+      );
+    }
+    throw error;
+  }
   let oversizeRetryUsed = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -1250,6 +1278,10 @@ export const geminiService = {
       }
 
       messages.push({ role: 'user', content: prompt });
+      const historyPromptBudget = GROQ_TPM_LIMIT - GROQ_MAX_TOKENS_FLOOR - GROQ_TPM_SAFETY_MARGIN;
+      while (messages.length > 2 && estimateGroqPromptTokens(messages) > historyPromptBudget) {
+        messages.splice(1, 1);
+      }
 
       const text = await callGroq(messages);
 
@@ -1260,7 +1292,12 @@ export const geminiService = {
     }
   },
 
-  async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc']): Promise<AnnotateResponse> {
+  async annotateChart(
+    base64Image: string,
+    prompt: string,
+    lenses: string[] = ['smc'],
+    imageInfo?: ModelImageInfo
+  ): Promise<AnnotateResponse> {
     try {
       // Build lens-specific system prompts — each lens is INDEPENDENT
       const lensPrompts: Record<string, { system: string; annotation: string }> = {
@@ -1855,7 +1892,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               {
                 type: 'image_url',
                 image_url: {
-                  url: 'data:image/png;base64,' + base64Image
+                  url: `data:${imageInfo?.mimeType || 'image/png'};base64,${base64Image}`
                 }
               },
               {
@@ -1866,7 +1903,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
           }
         ];
 
-        const analysisText = await callGroq(messages, GROQ_MODELS.vision, 3, `primary-${lens}`);
+        const analysisText = await callGroq(messages, GROQ_MODELS.vision, 3, `primary-${lens}`, imageInfo);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: AI Validator (Orchestrator-controlled) =====
@@ -1980,7 +2017,7 @@ IMPORTANT:
                   {
                     type: 'image_url',
                     image_url: {
-                      url: 'data:image/png;base64,' + base64Image
+                      url: `data:${imageInfo?.mimeType || 'image/png'};base64,${base64Image}`
                     }
                   },
                   {
@@ -1991,7 +2028,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, GROQ_MODELS.vision, 3, `validator-${lens}`);
+            const validatedText = await callGroq(validatorMessages, GROQ_MODELS.vision, 3, `validator-${lens}`, imageInfo);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -2029,6 +2066,9 @@ IMPORTANT:
           // Individual lens failed — try text-only fallback API before giving up
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
           const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
+          if (errorMsg.includes('Chart image is too large')) {
+            throw lensError;
+          }
           console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting text-only fallback API...`);
 
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====

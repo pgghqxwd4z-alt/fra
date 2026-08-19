@@ -3,6 +3,57 @@ import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiServic
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
+const MAX_MODEL_IMAGE_EDGE = 1024;
+
+interface ModelImageInfo {
+  base64: string;
+  width: number;
+  height: number;
+  mimeType: string;
+}
+
+function prepareModelImage(imageDataUrl: string): Promise<ModelImageInfo> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const width = img.naturalWidth || img.width;
+      const height = img.naturalHeight || img.height;
+      const mimeType = imageDataUrl.match(/^data:([^;]+);/)?.[1] || 'image/png';
+
+      if (Math.max(width, height) <= MAX_MODEL_IMAGE_EDGE) {
+        resolve({
+          base64: imageDataUrl.split(',')[1] || '',
+          width,
+          height,
+          mimeType,
+        });
+        return;
+      }
+
+      const scale = MAX_MODEL_IMAGE_EDGE / Math.max(width, height);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) {
+        reject(new Error('Unable to prepare the chart image for vision analysis.'));
+        return;
+      }
+
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      resolve({
+        base64: resizedDataUrl.split(',')[1] || '',
+        width: canvas.width,
+        height: canvas.height,
+        mimeType: 'image/jpeg',
+      });
+    };
+    img.onerror = () => reject(new Error('Unable to load the chart image for vision analysis.'));
+    img.src = imageDataUrl;
+  });
+}
+
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
     <div className="absolute inset-0 bg-emerald-500/5 rounded-lg border border-white/5 rotate-45 group-hover/icon:rotate-90 group-hover/icon:bg-emerald-500/10 transition-all duration-700"></div>
@@ -27,7 +78,22 @@ const Visualizer: React.FC = () => {
   const [showOriginal, setShowOriginal] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
-  const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
+  const [prompt, setPrompt] = useState(`Forecast the most likely next price move.
+
+Identify:
+- Current directional bias
+- Next liquidity event
+- Expected liquidity target
+- Expected retracement
+- Highest-probability entry zone
+- Invalidation
+- TP1
+- TP2
+- Final target
+
+Do not summarize what has already happened.
+
+Focus primarily on the future price path from the current market state.`);
   const [processing, setProcessing] = useState(false);
   const [isOver, setIsOver] = useState(false);
   const [coords, setCoords] = useState({ x: 0, y: 0 });
@@ -155,8 +221,13 @@ const Visualizer: React.FC = () => {
     if (!image || processing || selectedLenses.length === 0) return;
     setProcessing(true);
     try {
-      const base64 = image.split(',')[1];
-      const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
+      const modelImage = await prepareModelImage(image);
+      const result = await geminiService.annotateChart(
+        modelImage.base64,
+        prompt,
+        selectedLenses,
+        modelImage
+      );
       
       // Draw visual annotations on the chart image
       if (result.annotations && result.annotations.length > 0) {
@@ -174,6 +245,8 @@ const Visualizer: React.FC = () => {
       const isRateLimit = msg.includes('429') || msg.includes('rate') || msg.includes('Rate');
       if (isRateLimit) {
         alert("Rate limit reached. The Groq API allows 30 requests/min on the free tier. Please wait 30-60 seconds and try again.");
+      } else if (msg.includes('Chart image is too large')) {
+        alert(msg);
       } else {
         alert("Annotation engine error: " + msg.slice(0, 150) + ". Check console for details.");
       }
@@ -384,7 +457,7 @@ const Visualizer: React.FC = () => {
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="Directives..."
-                  className="w-full h-16 bg-black/40 border border-white/10 rounded-lg p-3 text-[10px] focus:outline-none focus:ring-1 focus:ring-emerald-500/50 text-white resize-none shadow-inner font-mono"
+                  className="w-full h-48 bg-black/40 border border-white/10 rounded-lg p-3 text-[10px] focus:outline-none focus:ring-1 focus:ring-emerald-500/50 text-white resize-none shadow-inner font-mono"
                 />
                 <button
                   onClick={handleProcess}
