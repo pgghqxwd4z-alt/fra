@@ -477,6 +477,16 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
     };
   }
 
+  if (GROQ_LOW_CAPACITY_MODE) {
+    return {
+      shouldRunValidator: false,
+      shouldRunKnowledgeSearch: false,
+      shouldFetchMarketData: true,
+      delayBeforeNextCallMs: 0,
+      reason: `Low-capacity mode (${GROQ_TPM_LIMIT} TPM) — skipping optional validator and knowledge stages.`
+    };
+  }
+
   // Healthy — calculate optimal delay based on remaining rate limit budget
   // Groq free tier: 30 req/min. Each full lens cycle = 3 calls (primary + knowledge + validator)
   // Total calls needed = totalLenses * 3 = up to 12 for 4 lenses
@@ -494,7 +504,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
 }
 
 // Maintenance: update health metrics after each API call
-function orchestratorRecordCall(stage: string, durationMs: number, success: boolean, rateLimitHeaders?: { remaining?: string; reset?: string }) {
+function orchestratorRecordCall(stage: string, durationMs: number, success: boolean, rateLimitHeaders?: { remaining?: string; reset?: string }): void {
   pipelineHealth.totalCallsMade++;
   pipelineHealth.lastCallTimestamp = Date.now();
 
@@ -532,16 +542,6 @@ function orchestratorRecordCall(stage: string, durationMs: number, success: bool
     } else {
       sh.failed++;
     }
-  }
-
-  if (GROQ_LOW_CAPACITY_MODE) {
-    return {
-      shouldRunValidator: false,
-      shouldRunKnowledgeSearch: false,
-      shouldFetchMarketData: true,
-      delayBeforeNextCallMs: 0,
-      reason: `Low-capacity mode (${GROQ_TPM_LIMIT} TPM) — skipping optional validator and knowledge stages.`
-    };
   }
 
   // Update overall average response time
