@@ -1,55 +1,22 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
-import { resolveGeminiModel, DEFAULT_GEMINI_MODEL } from "./geminiModelResolver";
+import OpenAI from "openai";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  const ai = apiKey ? new GoogleGenAI({ 
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  }) : null;
+  const apiKey = process.env.OPENAI_API_KEY;
+  const ai = apiKey ? new OpenAI({ apiKey }) : null;
+  const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
 
-  /* =========================================================
-     GEMINI MODEL RESOLVER
-     ========================================================= */
-  const GEMINI_MODEL = resolveGeminiModel(process.env.GEMINI_MODEL);
-
-  console.log(`[Gemini] model=${GEMINI_MODEL}`);
-
-  // All generateContent calls go through this wrapper.
-  // We use ai.models.generateContent and ensure the model string has the "models/" prefix.
-  const generateGeminiContent = async (request: any) => {
-    const modelId = resolveGeminiModel(request.model || GEMINI_MODEL);
-    const fullRequest = { ...request, model: modelId };
-    
-    try {
-      return await ai!.models.generateContent(fullRequest);
-    } catch (error: any) {
-      const message = String(error?.message || error);
-      // Fallback if the requested model failed
-      if (modelId !== DEFAULT_GEMINI_MODEL) {
-        console.warn(
-          `[Gemini] Model "${modelId}" failed; retrying with "${DEFAULT_GEMINI_MODEL}". Error: ${message}`
-        );
-        return await ai!.models.generateContent({ ...request, model: DEFAULT_GEMINI_MODEL });
-      }
-      throw error;
-    }
-  };
+  console.log(`[OpenAI] model=${OPENAI_MODEL}`);
 
   /* =========================================================
      KNOWLEDGE RETRIEVAL LAYER
@@ -90,26 +57,28 @@ async function startServer() {
   ];
 
   const knowledgeSchema = {
-    type: Type.OBJECT,
+    type: "object",
     properties: {
       items: {
-        type: Type.ARRAY,
+        type: "array",
         items: {
-          type: Type.OBJECT,
+          type: "object",
           properties: {
-            sourceId: { type: Type.STRING },
-            principle: { type: Type.STRING },
-            relevance: { type: Type.STRING },
-            sourceUrl: { type: Type.STRING },
-            sourceTitleFromWeb: { type: Type.STRING },
-            confidence: { type: Type.NUMBER },
+            sourceId: { type: "string" },
+            principle: { type: "string" },
+            relevance: { type: "string" },
+            sourceUrl: { type: "string" },
+            sourceTitleFromWeb: { type: "string" },
+            confidence: { type: "number" },
           },
           required: ["sourceId", "principle", "relevance", "sourceUrl", "sourceTitleFromWeb", "confidence"],
+          additionalProperties: false,
         },
       },
-      warnings: { type: Type.ARRAY, items: { type: Type.STRING } },
+      warnings: { type: "array", items: { type: "string" } },
     },
     required: ["items", "warnings"],
+    additionalProperties: false,
   };
 
   const clamp01 = (n: number) => Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
@@ -178,19 +147,33 @@ SOURCE POLICY:
 Return JSON only using the supplied schema.
 `;
 
-    const result = await generateGeminiContent({
-      model: GEMINI_MODEL,
-      contents: [{ role: "user", parts: [{ text: retrievalPrompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: knowledgeSchema,
-        tools: [{ googleSearch: {} }],
+    const searchResult = await ai!.responses.create({
+      model: OPENAI_MODEL,
+      tools: [{ type: "web_search" }],
+      input: retrievalPrompt,
+    });
+    const sourceMaterial = searchResult.output_text || "No web search material was returned.";
+    const result = await ai!.responses.create({
+      model: OPENAI_MODEL,
+      input: `${retrievalPrompt}
+
+WEB SEARCH MATERIAL:
+${sourceMaterial}
+
+Convert the material above into the requested JSON schema. Return JSON only.`,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "knowledge_retrieval",
+          strict: true,
+          schema: knowledgeSchema,
+        },
       },
     });
 
-    if (!result.text) return { items: [], warnings: ["Knowledge retrieval returned no text."] };
+    if (!result.output_text) return { items: [], warnings: ["Knowledge retrieval returned no text."] };
 
-    const parsed = JSON.parse(result.text);
+    const parsed = JSON.parse(result.output_text);
     const items = (parsed.items || []).flatMap((item: any) => {
       const source = sourceFor(item.sourceId);
       if (!source) return [];
@@ -221,7 +204,7 @@ Return JSON only using the supplied schema.
   // Helper to check for AI client
   const checkAiClient = (res: express.Response) => {
     if (!ai) {
-      res.status(500).json({ error: "GEMINI_API_KEY environment variable is not set." });
+      res.status(500).json({ error: "OPENAI_API_KEY environment variable is not set." });
       return false;
     }
     return true;
@@ -232,61 +215,66 @@ Return JSON only using the supplied schema.
      ========================================================= */
 
   const forecastSchema = {
-    type: Type.OBJECT,
+    type: "object",
     properties: {
-      currentState: { type: Type.STRING },
-      bias: { type: Type.STRING, enum: ["BULLISH", "BEARISH", "NEUTRAL"] },
-      confidence: { type: Type.NUMBER },
-      nextMove: { type: Type.STRING },
-      expectedPath: { type: Type.ARRAY, items: { type: Type.STRING } },
+      currentState: { type: "string" },
+      bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] },
+      confidence: { type: "number" },
+      nextMove: { type: "string" },
+      expectedPath: { type: "array", items: { type: "string" } },
       liquidityTarget: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          type: { type: Type.STRING, enum: ["BUY_SIDE", "SELL_SIDE", "UNKNOWN"] },
-          level: { type: Type.STRING },
-          reason: { type: Type.STRING }
+          type: { type: "string", enum: ["BUY_SIDE", "SELL_SIDE", "UNKNOWN"] },
+          level: { type: "string" },
+          reason: { type: "string" }
         },
-        required: ["type", "level", "reason"]
+        required: ["type", "level", "reason"],
+        additionalProperties: false,
       },
       retracement: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          expected: { type: Type.BOOLEAN },
-          zone: { type: Type.STRING },
-          reason: { type: Type.STRING }
+          expected: { type: "boolean" },
+          zone: { type: "string" },
+          reason: { type: "string" }
         },
-        required: ["expected", "zone", "reason"]
+        required: ["expected", "zone", "reason"],
+        additionalProperties: false,
       },
       entry: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          direction: { type: Type.STRING, enum: ["BUY", "SELL", "WAIT"] },
-          zone: { type: Type.STRING },
-          confirmation: { type: Type.STRING }
+          direction: { type: "string", enum: ["BUY", "SELL", "WAIT"] },
+          zone: { type: "string" },
+          confirmation: { type: "string" }
         },
-        required: ["direction", "zone", "confirmation"]
+        required: ["direction", "zone", "confirmation"],
+        additionalProperties: false,
       },
       targets: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          tp1: { type: Type.STRING },
-          tp2: { type: Type.STRING },
-          final: { type: Type.STRING }
+          tp1: { type: "string" },
+          tp2: { type: "string" },
+          final: { type: "string" }
         },
-        required: ["tp1", "tp2", "final"]
+        required: ["tp1", "tp2", "final"],
+        additionalProperties: false,
       },
-      invalidation: { type: Type.STRING },
-      primaryScenario: { type: Type.STRING },
-      alternativeScenario: { type: Type.STRING },
-      nextEvent: { type: Type.STRING },
-      structuralEvidence: { type: Type.ARRAY, items: { type: Type.STRING } },
-      warnings: { type: Type.ARRAY, items: { type: Type.STRING } }
+      invalidation: { type: "string" },
+      primaryScenario: { type: "string" },
+      alternativeScenario: { type: "string" },
+      nextEvent: { type: "string" },
+      structuralEvidence: { type: "array", items: { type: "string" } },
+      warnings: { type: "array", items: { type: "string" } }
     },
     required: [
       "currentState", "bias", "confidence", "nextMove", "expectedPath",
       "liquidityTarget", "retracement", "entry", "targets", "invalidation",
       "primaryScenario", "alternativeScenario", "nextEvent", "structuralEvidence", "warnings"
-    ]
+    ],
+    additionalProperties: false,
   };
 
   const FORECAST_SYSTEM_PROMPT = `
@@ -534,22 +522,26 @@ KNOWLEDGE RULES:
 
 Return ONLY valid JSON matching the requested forecast schema.`;
 
-      const result = await generateGeminiContent({
-        model: GEMINI_MODEL,
-        contents: [{
+      const result = await ai!.responses.create({
+        model: OPENAI_MODEL,
+        input: [{
           role: "user",
-          parts: [
-            { inlineData: { data: base64Image, mimeType: "image/png" } },
-            { text: augmentedPrompt }
-          ]
+          content: [
+            { type: "input_image", image_url: `data:image/png;base64,${base64Image}`, detail: "auto" },
+            { type: "input_text", text: augmentedPrompt },
+          ],
         }],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: forecastSchema,
-        }
+        text: {
+          format: {
+            type: "json_schema",
+            name: "forecast",
+            strict: true,
+            schema: forecastSchema,
+          },
+        },
       });
 
-      const text = result.text;
+      const text = result.output_text;
       if (!text) throw new Error("No response text from model");
       res.json({
         analysis: text,
@@ -567,23 +559,36 @@ Return ONLY valid JSON matching the requested forecast schema.`;
     const { prompt, history } = req.body;
 
     try {
-      const chat = ai!.chats.create({ 
-        model: GEMINI_MODEL,
-        config: {
-          systemInstruction: FORECAST_SYSTEM_PROMPT,
-          tools: [{ googleSearch: {} }]
-        },
-        history: history.map((h: any) => ({
-          role: h.role,
-          parts: [{ text: h.parts[0].text }]
-        }))
+      const result = await ai!.responses.create({
+        model: OPENAI_MODEL,
+        instructions: FORECAST_SYSTEM_PROMPT,
+        tools: [{ type: "web_search" }],
+        input: [
+          ...((history || []).map((h: any) => ({
+            role: h.role === "model" ? "assistant" : h.role,
+            content: [{ type: "input_text", text: h.parts?.[0]?.text || h.text || "" }],
+          }))),
+          {
+            role: "user",
+            content: [{ type: "input_text", text: prompt }],
+          },
+        ],
       });
 
-      const result = await chat.sendMessage({ message: prompt });
-      
+      const grounding = result.output.flatMap((item: any) =>
+        item.type === "message"
+          ? item.content.flatMap((content: any) =>
+              (content.annotations || [])
+                .filter((annotation: any) => annotation.type === "url_citation")
+                .map((annotation: any) => ({
+                  web: { uri: annotation.url, title: annotation.title || annotation.url },
+                }))
+            )
+          : []
+      );
       res.json({
-        text: result.text,
-        grounding: result.candidates?.[0]?.groundingMetadata?.groundingChunks
+        text: result.output_text,
+        grounding,
       });
     } catch (error: any) {
       console.error("Chat error:", error);
@@ -602,10 +607,14 @@ Return ONLY valid JSON matching the requested forecast schema.`;
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    const clientDistPath = path.join(process.cwd(), 'dist', 'client');
+    app.use(express.static(clientDistPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (path.extname(req.path)) {
+        res.status(404).end();
+        return;
+      }
+      res.sendFile(path.join(clientDistPath, 'index.html'));
     });
   }
 

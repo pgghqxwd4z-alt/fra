@@ -22,7 +22,7 @@ interface HistoryEntry {
   }[];
 }
 
-export const geminiService = {
+export const aiService = {
 
   async annotateChart(
     base64Image: string,

@@ -6,7 +6,7 @@ QuantSage is a React and Express trading analysis terminal.
 
 - Node.js 20.18.1
 - npm 10.8.2
-- A Gemini API key
+- An OpenAI API key
 
 ## Setup
 
@@ -14,7 +14,7 @@ QuantSage is a React and Express trading analysis terminal.
 cp .env.example .env
 ```
 
-Set `GEMINI_API_KEY` in `.env`. `GEMINI_MODEL` is optional.
+Set `OPENAI_API_KEY` in `.env`. `OPENAI_MODEL` is optional.
 
 ```sh
 npm install

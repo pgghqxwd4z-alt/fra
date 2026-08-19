@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { geminiService } from '../services/geminiService';
+import { aiService } from '../services/aiService';
 import { ForecastResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
@@ -178,7 +178,7 @@ Focus primarily on the future price path from the current market state.
     setProcessing(true);
     try {
       const base64 = image.split(',')[1];
-      const result = await geminiService.annotateChart(base64, prompt, selectedLenses);
+      const result = await aiService.annotateChart(base64, prompt, selectedLenses);
       setResultImage(result.image);
       setAnalysis(result.analysis);
       setForecast(result.forecast);

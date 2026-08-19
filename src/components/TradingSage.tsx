@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { geminiService } from '../services/geminiService';
+import { aiService } from '../services/aiService';
 import { Message } from '../types';
 
 const TradingSage: React.FC = () => {
@@ -50,7 +50,7 @@ const TradingSage: React.FC = () => {
         parts: [{ text: m.content }]
       }));
 
-      const response = await geminiService.chatWithGrounding(input, history);
+      const response = await aiService.chatWithGrounding(input, history);
       
       setMessages(prev => [...prev, {
         role: 'model',
