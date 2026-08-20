@@ -1,3 +1,5 @@
+import type { ForecastResult } from '../types';
+
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODELS = {
@@ -28,6 +30,209 @@ Your knowledge base is strictly derived from:
 5. Pure Price Action - Focus on clean chart mechanics.
 Provide detailed, institutional-grade analysis grounded in these frameworks.`;
 
+const FORECAST_SYSTEM_PROMPT = `You are QuantSage Pro, a forward-looking institutional market analysis engine.
+
+Your primary objective is NOT to explain what has already happened.
+
+Your primary objective is to determine:
+
+"WHAT IS THE MOST LIKELY NEXT PRICE MOVE FROM THE CURRENT MARKET STATE?"
+
+You must distinguish between:
+
+PAST:
+What has already happened.
+
+PRESENT:
+What price is doing now.
+
+FUTURE:
+What price is most likely to do next.
+
+Historical price action is evidence only.
+Do not spend most of the response describing historical candles.
+
+==================================================
+ANALYSIS PIPELINE
+==================================================
+
+STEP 1 — CURRENT STATE
+
+Determine:
+
+- Current market structure
+- Current price location
+- Higher-timeframe directional bias if visible
+- Swing highs
+- Swing lows
+- Buy-side liquidity
+- Sell-side liquidity
+- Order Blocks
+- Fair Value Gaps
+- Displacement
+- BOS
+- CHoCH
+- Premium / Discount
+- Support / Resistance
+
+STEP 2 — LIQUIDITY MAP
+
+Determine:
+
+- Which liquidity has already been taken
+- Which liquidity remains
+- Which liquidity pool is the most attractive next target
+- Whether price is likely to seek buy-side or sell-side liquidity
+
+Do NOT automatically assume the nearest liquidity is the target.
+
+STEP 3 — INSTITUTIONAL INTERPRETATION
+
+Infer probable market intent from observable price structure.
+
+Possible behaviors:
+
+- Liquidity sweep
+- Accumulation
+- Distribution
+- Continuation
+- Reversal
+- FVG mitigation
+- Order Block mitigation
+- Stop hunt
+- Displacement
+- Expansion
+
+Never claim access to private institutional orders.
+
+Use observable market structure only.
+
+STEP 4 — FORECAST
+
+This is the MOST IMPORTANT step.
+
+Predict the most likely NEXT price sequence.
+
+Think:
+
+CURRENT PRICE
+↓
+NEXT EVENT
+↓
+RETRACEMENT
+↓
+ENTRY ZONE
+↓
+DISPLACEMENT
+↓
+LIQUIDITY TARGET
+
+Choose ONE primary scenario.
+
+Do not give three equally weighted possibilities.
+
+STEP 5 — ENTRY
+
+Determine whether an actionable entry currently exists.
+
+Possible outputs:
+
+BUY
+SELL
+WAIT
+
+If confirmation has not occurred:
+
+WAIT.
+
+Never manufacture an entry.
+
+STEP 6 — INVALIDATION
+
+Determine exactly what price behavior would invalidate the primary thesis.
+
+The invalidation must be structural.
+
+STEP 7 — ALTERNATIVE
+
+Provide only ONE alternative scenario.
+
+==================================================
+FORECAST RULES
+==================================================
+
+Use forward-looking reasoning.
+
+Prefer:
+
+"Price is most likely to..."
+"The next event is likely to..."
+"The expected path is..."
+"If price reaches..."
+"The forecast becomes invalid if..."
+
+Avoid making the response primarily:
+
+"Price did..."
+"Price formed..."
+"This candle caused..."
+"The market already..."
+
+Do not pretend the future is known.
+
+This is a probabilistic forecast.
+
+==================================================
+SYNTHESIZED LENSES
+==================================================
+
+Apply the following institutional and psychological principles to keep the forecast structurally and psychologically sound:
+
+- Market Wizards (Schwager): defined edge, asymmetric risk/reward, defence before offence.
+- Trading in the Zone (Douglas): think in probabilities; the edge exists over a series of trades, never a single one.
+- The Disciplined Trader (Douglas): risk is defined before entry; the market is always right.
+- Goldman Sachs institutional strategy: read where capital is deployed and where liquidity is engineered, from observable structure only.
+- Smart Money Concepts: Order Blocks, Fair Value Gaps, liquidity sweeps, BOS/CHoCH.
+- Pure Price Action: raw swing structure, momentum, rejection, expansion.
+
+Never fabricate book quotations and never attribute unsupported claims to an author. Framework knowledge cannot override observable market evidence. If required confirmation is absent, return WAIT.
+
+==================================================
+CONFIDENCE
+==================================================
+
+Confidence must represent the strength of visible evidence.
+
+Do not give artificially high confidence.
+
+If the chart is ambiguous, lower confidence.
+
+If there is no valid setup:
+
+entry.direction = WAIT
+
+and include:
+
+"NO HIGH-PROBABILITY ENTRY — WAIT."
+
+==================================================
+FINAL PRIORITY
+==================================================
+
+The most important output is:
+
+NEXT MOVE
+
+The analysis should answer:
+1. Where is price now?
+2. What is most likely to happen next?
+3. What liquidity is likely to be targeted?
+4. Where could the retracement occur?
+5. Where is the potential entry?
+6. What is the target?
+7. What invalidates the forecast?
+`;
+
 interface ChatResponse {
   text: string;
   grounding?: GroundingChunk[];
@@ -55,6 +260,7 @@ export interface AnnotateResponse {
   image: string | null;
   analysis: string;
   annotations: ChartAnnotation[];
+  forecast?: ForecastResult;
 }
 
 interface HistoryEntry {
@@ -764,6 +970,160 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   }
 
   return annotations;
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const stripped = stripLeadingThinkBlock(text);
+  const fenced = stripped.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] || stripped;
+  const start = fenced.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < fenced.length; index++) {
+    const character = fenced[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === '{') {
+      depth++;
+    } else if (character === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          const parsed: unknown = JSON.parse(fenced.slice(start, index + 1));
+          return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeForecast(text: string): ForecastResult | undefined {
+  const parsed = extractJsonObject(text);
+  if (!parsed) return undefined;
+
+  const objectValue = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  const textValue = (value: unknown, fallback: string): string =>
+    typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  const stringArray = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim())
+      : [];
+  const booleanValue = (value: unknown, fallback: boolean): boolean =>
+    typeof value === 'boolean' ? value : fallback;
+  const confidenceValue = (value: unknown): number => {
+    const parsedConfidence = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+    return Number.isFinite(parsedConfidence) ? Math.round(Math.max(0, Math.min(100, parsedConfidence))) : 0;
+  };
+  const biasValue = (value: unknown): ForecastResult['bias'] =>
+    value === 'BULLISH' || value === 'BEARISH' || value === 'NEUTRAL' ? value : 'NEUTRAL';
+  const liquidityTypeValue = (value: unknown): ForecastResult['liquidityTarget']['type'] =>
+    value === 'BUY_SIDE' || value === 'SELL_SIDE' || value === 'UNKNOWN' ? value : 'UNKNOWN';
+  const directionValue = (value: unknown): ForecastResult['entry']['direction'] =>
+    value === 'BUY' || value === 'SELL' || value === 'WAIT' ? value : 'WAIT';
+
+  const liquidityTarget = objectValue(parsed.liquidityTarget);
+  const retracement = objectValue(parsed.retracement);
+  const entry = objectValue(parsed.entry);
+  const targets = objectValue(parsed.targets);
+
+  return {
+    currentState: textValue(parsed.currentState, 'Current state unavailable.'),
+    bias: biasValue(parsed.bias),
+    confidence: confidenceValue(parsed.confidence),
+    nextMove: textValue(parsed.nextMove, 'No reliable next move is available.'),
+    expectedPath: stringArray(parsed.expectedPath),
+    liquidityTarget: {
+      type: liquidityTypeValue(liquidityTarget.type),
+      level: textValue(liquidityTarget.level, 'Unknown'),
+      reason: textValue(liquidityTarget.reason, 'Liquidity target unavailable.'),
+    },
+    retracement: {
+      expected: booleanValue(retracement.expected, false),
+      zone: textValue(retracement.zone, 'Unknown'),
+      reason: textValue(retracement.reason, 'Retracement outlook unavailable.'),
+    },
+    entry: {
+      direction: directionValue(entry.direction),
+      zone: textValue(entry.zone, 'Wait for confirmation.'),
+      confirmation: textValue(entry.confirmation, 'Wait for structural confirmation.'),
+    },
+    targets: {
+      tp1: textValue(targets.tp1, 'Unknown'),
+      tp2: textValue(targets.tp2, 'Unknown'),
+      final: textValue(targets.final, 'Unknown'),
+    },
+    invalidation: textValue(parsed.invalidation, 'Structural invalidation unavailable.'),
+    primaryScenario: textValue(parsed.primaryScenario, 'No reliable primary scenario is available.'),
+    alternativeScenario: textValue(parsed.alternativeScenario, 'No reliable alternative scenario is available.'),
+    nextEvent: textValue(parsed.nextEvent, 'Awaiting confirmation.'),
+    structuralEvidence: stringArray(parsed.structuralEvidence),
+    warnings: stringArray(parsed.warnings),
+    timestamp: Date.now(),
+  };
+}
+
+function buildForecastMessages(prompt: string, analysisParts: string[]): GroqMessage[] {
+  const schemaInstruction = `Return ONLY one JSON object with exactly these keys and value types:
+{
+  "currentState": "string",
+  "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": 0,
+  "nextMove": "string",
+  "expectedPath": ["string"],
+  "liquidityTarget": { "type": "BUY_SIDE" | "SELL_SIDE" | "UNKNOWN", "level": "string", "reason": "string" },
+  "retracement": { "expected": true, "zone": "string", "reason": "string" },
+  "entry": { "direction": "BUY" | "SELL" | "WAIT", "zone": "string", "confirmation": "string" },
+  "targets": { "tp1": "string", "tp2": "string", "final": "string" },
+  "invalidation": "string",
+  "primaryScenario": "string",
+  "alternativeScenario": "string",
+  "nextEvent": "string",
+  "structuralEvidence": ["string"],
+  "warnings": ["string"]
+}
+All keys are required. Do not include markdown, code fences, commentary, or any other keys.`;
+  const messages: GroqMessage[] = [
+    { role: 'system', content: `${FORECAST_SYSTEM_PROMPT}\n\n${schemaInstruction}` },
+  ];
+  const evidence = analysisParts.map((part, index) => ({
+    label: `--- EVIDENCE ${index + 1} ---\n`,
+    text: part.slice(0, 2400),
+  }));
+  const historyPromptBudget = GROQ_TPM_LIMIT - GROQ_MAX_TOKENS_FLOOR - GROQ_TPM_SAFETY_MARGIN;
+  const buildUserContent = () =>
+    `USER DIRECTIVE:\n${prompt}\n\nUse the following lens and synthesis analysis as evidence. Prioritize the most recent structural information and forecast one primary path:\n\n${
+      evidence.map(item => `${item.label}${item.text}`).join('\n\n')
+    }`;
+
+  messages.push({ role: 'user', content: buildUserContent() });
+  while (estimateGroqPromptTokens(messages) > historyPromptBudget) {
+    const longest = evidence.reduce((best, item, index) =>
+      item.text.length > (evidence[best]?.text.length || 0) ? index : best, 0);
+    if (!evidence[longest] || evidence[longest].text.length <= 200) break;
+    evidence[longest].text = evidence[longest].text.slice(0, Math.max(200, evidence[longest].text.length - 400));
+    messages[1] = { role: 'user', content: buildUserContent() };
+  }
+  return messages;
 }
 
 function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
@@ -2316,13 +2676,36 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
         console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — need 2+ lens analyses (have ${allAnalysisParts.length}).`);
       }
 
+      // ===== STAGE 5: STRUCTURED FORECAST EXTRACTION =====
+      // The forecast is the headline output and remains enabled in low-capacity mode.
+      let forecast: ForecastResult | undefined;
+      try {
+        const forecastDecision = orchestratorDecide(lenses.length, lenses.length);
+        console.log(`[Orchestrator] Forecast stage: ${forecastDecision.reason}`);
+        if (forecastDecision.delayBeforeNextCallMs > 0) {
+          console.log(`[Orchestrator] Waiting ${forecastDecision.delayBeforeNextCallMs}ms before forecast stage...`);
+          await new Promise(resolve => setTimeout(resolve, forecastDecision.delayBeforeNextCallMs));
+        }
+
+        const forecastMessages = buildForecastMessages(prompt, allAnalysisParts);
+        const forecastText = await callGroq(forecastMessages, GROQ_MODELS.text, 2, 'forecast');
+        forecast = normalizeForecast(forecastText);
+        if (!forecast) {
+          console.warn('[Orchestrator] Forecast stage returned no parseable JSON (non-critical).');
+        } else {
+          console.log('[Orchestrator] Forecast stage COMPLETE.');
+        }
+      } catch (forecastError) {
+        console.warn('[Orchestrator] Forecast stage failed (non-critical):', forecastError);
+      }
+
       // ===== ORCHESTRATOR: Post-pipeline health summary =====
       console.log(`[Orchestrator] Pipeline complete. Status: ${pipelineHealth.apiStatus} | Calls: ${pipelineHealth.totalCallsMade} | Failed: ${pipelineHealth.totalCallsFailed} | Rate limits hit: ${pipelineHealth.totalRateLimitsHit} | Avg response: ${Math.round(pipelineHealth.avgResponseTimeMs)}ms`);
 
       // Combine all independent analyses with clear separators
       const combinedAnalysis = allAnalysisParts.join('\n\n---\n\n');
 
-      return { image: null, analysis: combinedAnalysis, annotations: allAnnotations };
+      return { image: null, analysis: combinedAnalysis, annotations: allAnnotations, forecast };
     } catch (error) {
       console.error("Annotation Error:", error);
       throw error;

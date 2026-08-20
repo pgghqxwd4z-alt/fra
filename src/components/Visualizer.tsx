@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiService';
+import type { ForecastResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
@@ -72,11 +73,20 @@ const LegendItem: React.FC<{ color: string; label: string; desc: string }> = ({ 
   </div>
 );
 
+const ForecastCard: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <div className="rounded-lg border border-white/10 bg-black/20 p-2 min-h-[58px]">
+    <p className="text-[7px] font-bold uppercase tracking-widest text-white/30 mb-1">{label}</p>
+    <div className="text-[9px] text-white leading-tight">{value}</div>
+  </div>
+);
+
 const Visualizer: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
+  const [forecast, setForecast] = useState<ForecastResult | null>(null);
+  const [forecastExpanded, setForecastExpanded] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [prompt, setPrompt] = useState(`Forecast the most likely next price move.
 
@@ -146,6 +156,8 @@ Focus primarily on the future price path from the current market state.`);
       setImage(event.target?.result as string);
       setResultImage(null);
       setAnalysis(null);
+      setForecast(null);
+      setForecastExpanded(false);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -220,6 +232,8 @@ Focus primarily on the future price path from the current market state.`);
   const handleProcess = async () => {
     if (!image || processing || selectedLenses.length === 0) return;
     setProcessing(true);
+    setForecast(null);
+    setForecastExpanded(false);
     try {
       const modelImage = await prepareModelImage(image);
       const result = await geminiService.annotateChart(
@@ -238,6 +252,7 @@ Focus primarily on the future price path from the current market state.`);
       }
       
       setAnalysis(result.analysis);
+      setForecast(result.forecast || null);
       setShowOriginal(false);
     } catch (error) {
       console.error('[Annotation Engine]', error);
@@ -362,7 +377,7 @@ Focus primarily on the future price path from the current market state.`);
                 {/* Image Overlay Controls */}
                 <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-300 z-40 scale-95 group-hover:scale-100 -translate-y-2 group-hover:translate-y-0">
                   <button
-                    onClick={(e) => { e.stopPropagation(); setImage(null); setResultImage(null); setAnalysis(null); }}
+                    onClick={(e) => { e.stopPropagation(); setImage(null); setResultImage(null); setAnalysis(null); setForecast(null); setForecastExpanded(false); }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
                   >
@@ -417,6 +432,91 @@ Focus primarily on the future price path from the current market state.`);
         {/* Intelligence & Control Column */}
         <div className="lg:w-[380px] flex-shrink-0 flex flex-col gap-4 overflow-hidden relative z-20">
           <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-4">
+            {forecast && (
+              <div className="glass-panel rounded-[1.5rem] p-4 border border-emerald-500/20 bg-slate-900/60 backdrop-blur-2xl shrink-0">
+                <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
+                      forecast.bias === 'BULLISH'
+                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                        : forecast.bias === 'BEARISH'
+                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
+                        : 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                    }`}>
+                      <i className={`fa-solid ${forecast.bias === 'BULLISH' ? 'fa-arrow-trend-up' : forecast.bias === 'BEARISH' ? 'fa-arrow-trend-down' : 'fa-minus'} text-[10px]`}></i>
+                    </div>
+                    <div>
+                      <p className={`text-[10px] font-bold tracking-widest ${forecast.bias === 'BULLISH' ? 'text-emerald-400' : forecast.bias === 'BEARISH' ? 'text-rose-400' : 'text-amber-400'}`}>{forecast.bias}</p>
+                      <p className="text-[7px] text-white/30 uppercase tracking-widest">{forecast.confidence}% CONF</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setForecastExpanded(true)}
+                    className="w-7 h-7 rounded-lg border border-white/10 text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+                    title="Expand forecast"
+                  >
+                    <i className="fa-solid fa-expand text-[9px]"></i>
+                  </button>
+                </div>
+
+                <div className="mt-3 rounded-lg border border-emerald-500/15 bg-emerald-500/[0.04] p-3">
+                  <p className="text-[7px] font-bold uppercase tracking-widest text-emerald-400/60 mb-1">Next Leg</p>
+                  <p className="text-[11px] text-white leading-relaxed">{forecast.nextMove}</p>
+                </div>
+
+                <div className="mt-3">
+                  <p className="text-[7px] font-bold uppercase tracking-widest text-white/30 mb-2">Path</p>
+                  {forecast.expectedPath.length > 0 ? (
+                    <ol className="space-y-2">
+                      {forecast.expectedPath.map((step, index) => (
+                        <li key={`${step}-${index}`} className="flex gap-2 text-[9px] text-slate-300 leading-tight">
+                          <span className="text-emerald-400 font-mono font-bold">{index + 1}.</span>
+                          <span>{step}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-[9px] text-white/30">No projected path supplied.</p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <ForecastCard label="Entry" value={<><span className="text-emerald-400 font-bold">{forecast.entry.direction}</span><br />{forecast.entry.zone}</>} />
+                  <ForecastCard label="Next" value={forecast.nextEvent} />
+                  <ForecastCard label="Liq" value={<>{forecast.liquidityTarget.type.replace('_', ' ')}<br />{forecast.liquidityTarget.level}</>} />
+                  <ForecastCard label="Invalid" value={forecast.invalidation} />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  <ForecastCard label="TP1" value={forecast.targets.tp1} />
+                  <ForecastCard label="TP2" value={forecast.targets.tp2} />
+                  <ForecastCard label="TP3" value={forecast.targets.final} />
+                </div>
+
+                <div className="space-y-2 mt-3">
+                  <div className="rounded-lg border border-white/5 bg-black/20 p-2">
+                    <p className="text-[7px] font-bold uppercase tracking-widest text-emerald-400/60 mb-1">Primary Scenario</p>
+                    <p className="text-[9px] text-slate-300 leading-relaxed">{forecast.primaryScenario}</p>
+                  </div>
+                  <div className="rounded-lg border border-white/5 bg-black/20 p-2">
+                    <p className="text-[7px] font-bold uppercase tracking-widest text-sky-400/60 mb-1">Alternative Scenario</p>
+                    <p className="text-[9px] text-slate-300 leading-relaxed">{forecast.alternativeScenario}</p>
+                  </div>
+                </div>
+
+                {forecast.warnings.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {forecast.warnings.map((warning, index) => (
+                      <p key={`${warning}-${index}`} className="text-[8px] text-rose-300 leading-relaxed flex gap-2">
+                        <i className="fa-solid fa-triangle-exclamation mt-0.5 text-[8px]"></i>
+                        <span>{warning}</span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Tactical Settings */}
             <div className="glass-panel rounded-[1.5rem] p-4 space-y-4 shrink-0 group border border-white/5 bg-slate-900/40">
               <div className="flex items-center gap-3">
@@ -616,6 +716,77 @@ Focus primarily on the future price path from the current market state.`);
           </div>
         </div>
       </div>
+      {forecast && forecastExpanded && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md p-4 sm:p-8 flex items-center justify-center"
+          onClick={() => setForecastExpanded(false)}
+        >
+          <div
+            className="w-full max-w-5xl max-h-full overflow-y-auto rounded-[1.5rem] border border-emerald-500/20 bg-slate-950/95 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="p-5 sm:p-7">
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-5">
+                <div>
+                  <p className="text-[8px] font-mono uppercase tracking-[0.35em] text-white/30 mb-2">Structured Forecast Engine</p>
+                  <div className="flex items-center gap-3">
+                    <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${forecast.bias === 'BULLISH' ? 'text-emerald-400' : forecast.bias === 'BEARISH' ? 'text-rose-400' : 'text-amber-400'}`}>{forecast.bias}</h2>
+                    <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-bold tracking-widest text-white/70">{forecast.confidence}% CONFIDENCE</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setForecastExpanded(false)}
+                  className="w-9 h-9 rounded-lg border border-white/10 text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                  title="Close forecast"
+                >
+                  <i className="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+
+              <div className="grid lg:grid-cols-[1.4fr_0.9fr] gap-5 mt-5">
+                <div className="space-y-5">
+                  <div>
+                    <p className="text-[8px] font-bold uppercase tracking-[0.3em] text-emerald-400/70 mb-2">Primary Tactical Objective</p>
+                    <p className="text-lg text-white leading-relaxed">{forecast.nextMove}</p>
+                  </div>
+                  <div>
+                    <p className="text-[8px] font-bold uppercase tracking-[0.3em] text-white/35 mb-3">Anticipated Price Path</p>
+                    {forecast.expectedPath.length > 0 ? (
+                      <ol className="space-y-3">
+                        {forecast.expectedPath.map((step, index) => (
+                          <li key={`${step}-${index}`} className="flex gap-3 items-start">
+                            <span className="w-6 h-6 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center text-[9px] font-bold shrink-0">{index + 1}</span>
+                            <span className="text-sm text-slate-300 leading-relaxed pt-1">{step}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="text-sm text-white/35">No projected path supplied.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <ForecastCard label="Signal" value={forecast.entry.direction} />
+                    <ForecastCard label="Next" value={forecast.nextEvent} />
+                  </div>
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.05] p-4">
+                    <p className="text-[8px] font-bold uppercase tracking-widest text-emerald-400/70 mb-2">Conditional Entry</p>
+                    <p className="text-sm text-white">{forecast.entry.zone}</p>
+                    <p className="text-[10px] text-slate-400 leading-relaxed mt-2">{forecast.entry.confirmation}</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <ForecastCard label="TP1" value={forecast.targets.tp1} />
+                    <ForecastCard label="TP2" value={forecast.targets.tp2} />
+                    <ForecastCard label="TP3" value={forecast.targets.final} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <style>{`
         @keyframes neural-scan {
           0% { top: 0; }
