@@ -60,9 +60,10 @@ const TradingSage: React.FC = () => {
         timestamp: Date.now()
       }]);
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown terminal error";
       setMessages(prev => [...prev, {
         role: 'model',
-        content: "Error: Terminal link failed. Please check connection.",
+        content: `Error: ${message}`,
         timestamp: Date.now()
       }]);
     } finally {

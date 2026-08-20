@@ -22,6 +22,19 @@ interface HistoryEntry {
   }[];
 }
 
+const throwResponseError = async (response: Response, fallback: string): Promise<never> => {
+  let message = response.statusText || fallback;
+  try {
+    const body = await response.json();
+    if (typeof body?.error === "string" && body.error.trim()) {
+      message = body.error;
+    }
+  } catch {
+    // Keep the status text when the server did not return JSON.
+  }
+  throw new Error(message);
+};
+
 export const aiService = {
 
   async annotateChart(
@@ -37,8 +50,7 @@ export const aiService = {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to annotate chart");
+        await throwResponseError(response, "Failed to annotate chart");
       }
 
       const data = await response.json();
@@ -65,8 +77,7 @@ export const aiService = {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to get chat response");
+        await throwResponseError(response, "Failed to get chat response");
       }
 
       const data = await response.json();

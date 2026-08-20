@@ -7,16 +7,28 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const PORT = Number(process.env.PORT || 3000);
+type AIProvider = "openai" | "groq";
 
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  const ai = apiKey ? new OpenAI({ apiKey }) : null;
+  const AI_PROVIDER: AIProvider = process.env.AI_PROVIDER === "groq" ? "groq" : "openai";
+  const openAiApiKey = process.env.OPENAI_API_KEY;
+  const groqApiKey = process.env.GROQ_API_KEY;
+  const ai = openAiApiKey ? new OpenAI({ apiKey: openAiApiKey }) : null;
+  const groqAi = groqApiKey
+    ? new OpenAI({ apiKey: groqApiKey, baseURL: "https://api.groq.com/openai/v1" })
+    : null;
   const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+  const GROQ_MODEL = process.env.GROQ_MODEL || "groq/compound";
+  const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || "qwen/qwen3.6-27b";
 
-  console.log(`[OpenAI] model=${OPENAI_MODEL}`);
+  console.log(
+    AI_PROVIDER === "groq"
+      ? `[Groq] model=${GROQ_MODEL} visionModel=${GROQ_VISION_MODEL}`
+      : `[OpenAI] model=${OPENAI_MODEL}`
+  );
 
   /* =========================================================
      KNOWLEDGE RETRIEVAL LAYER
@@ -119,6 +131,34 @@ async function startServer() {
     return [...ids];
   };
 
+  const mapKnowledgeResult = (parsed: any) => {
+    const items = (parsed.items || []).flatMap((item: any) => {
+      const source = sourceFor(item.sourceId);
+      if (!source) return [];
+      return [{
+        sourceId: source.id,
+        sourceTitle: source.title,
+        author: source.author,
+        kind: source.kind,
+        principle: String(item.principle || ""),
+        relevance: String(item.relevance || ""),
+        sourceUrl: safeSourceUrl(item.sourceUrl, source.allowedDomains || []),
+        sourceTitleFromWeb: String(item.sourceTitleFromWeb || ""),
+        confidence: clamp01(Number(item.confidence)),
+      }];
+    });
+
+    const context = items.length
+      ? items.map((item: any, i: number) =>
+          `${i + 1}. ${item.sourceTitle}${item.author ? ` — ${item.author}` : ""}\n` +
+          `Principle: ${item.principle}\nRelevance: ${item.relevance}\n` +
+          `Source: ${item.sourceUrl || "not provided"}\nConfidence: ${item.confidence}`
+        ).join("\n\n")
+      : "NO EXTERNAL KNOWLEDGE RETRIEVED.";
+
+    return { items, context, warnings: parsed.warnings || [] };
+  };
+
   const retrieveKnowledge = async (prompt: string, lenses: string[] = [], marketContext = "") => {
     const sourceIds = routeKnowledge(lenses);
     const sourceText = sourceIds.map((id) => `- ${id}`).join("\n");
@@ -147,6 +187,19 @@ SOURCE POLICY:
 Return JSON only using the supplied schema.
 `;
 
+    if (AI_PROVIDER === "groq") {
+      const result = await groqAi!.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [{ role: "user", content: retrievalPrompt }],
+        response_format: { type: "json_object" },
+      });
+      const text = result.choices[0]?.message?.content;
+      if (!text || typeof text !== "string") {
+        return { items: [], context: "NO EXTERNAL KNOWLEDGE RETRIEVED.", warnings: ["Knowledge retrieval returned no text."] };
+      }
+      return mapKnowledgeResult(JSON.parse(text));
+    }
+
     const searchResult = await ai!.responses.create({
       model: OPENAI_MODEL,
       tools: [{ type: "web_search" }],
@@ -171,40 +224,17 @@ Convert the material above into the requested JSON schema. Return JSON only.`,
       },
     });
 
-    if (!result.output_text) return { items: [], warnings: ["Knowledge retrieval returned no text."] };
-
-    const parsed = JSON.parse(result.output_text);
-    const items = (parsed.items || []).flatMap((item: any) => {
-      const source = sourceFor(item.sourceId);
-      if (!source) return [];
-      return [{
-        sourceId: source.id,
-        sourceTitle: source.title,
-        author: source.author,
-        kind: source.kind,
-        principle: String(item.principle || ""),
-        relevance: String(item.relevance || ""),
-        sourceUrl: safeSourceUrl(item.sourceUrl, source.allowedDomains || []),
-        sourceTitleFromWeb: String(item.sourceTitleFromWeb || ""),
-        confidence: clamp01(Number(item.confidence)),
-      }];
-    });
-
-    const context = items.length
-      ? items.map((item: any, i: number) =>
-          `${i + 1}. ${item.sourceTitle}${item.author ? ` — ${item.author}` : ""}\n` +
-          `Principle: ${item.principle}\nRelevance: ${item.relevance}\n` +
-          `Source: ${item.sourceUrl || "not provided"}\nConfidence: ${item.confidence}`
-        ).join("\n\n")
-      : "NO EXTERNAL KNOWLEDGE RETRIEVED.";
-
-    return { items, context, warnings: parsed.warnings || [] };
+    if (!result.output_text) return { items: [], context: "NO EXTERNAL KNOWLEDGE RETRIEVED.", warnings: ["Knowledge retrieval returned no text."] };
+    return mapKnowledgeResult(JSON.parse(result.output_text));
   };
 
   // Helper to check for AI client
   const checkAiClient = (res: express.Response) => {
-    if (!ai) {
-      res.status(500).json({ error: "OPENAI_API_KEY environment variable is not set." });
+    const missingKey = AI_PROVIDER === "groq"
+      ? "GROQ_API_KEY environment variable is not set."
+      : "OPENAI_API_KEY environment variable is not set.";
+    if (AI_PROVIDER === "groq" ? !groqAi : !ai) {
+      res.status(500).json({ error: missingKey });
       return false;
     }
     return true;
@@ -278,6 +308,75 @@ Convert the material above into the requested JSON schema. Return JSON only.`,
       "primaryScenario", "alternativeScenario", "nextEvent", "structuralEvidence", "warnings"
     ],
     additionalProperties: false,
+  };
+
+  const groqForecastSchemaPrompt = `
+Return a JSON object matching this forecast schema exactly. Include every property shown, use the enum values exactly, and do not add properties:
+${JSON.stringify(forecastSchema, null, 2)}
+`;
+
+  const asText = (value: any) => typeof value === "string" ? value : value == null ? "" : String(value);
+  const asTextArray = (value: any) => Array.isArray(value) ? value.map(asText) : [];
+  const normalizeForecast = (value: any) => {
+    const source = value && typeof value === "object" ? value : {};
+    const liquidityTarget = source.liquidityTarget && typeof source.liquidityTarget === "object"
+      ? source.liquidityTarget
+      : {};
+    const retracement = source.retracement && typeof source.retracement === "object"
+      ? source.retracement
+      : {};
+    const entry = source.entry && typeof source.entry === "object" ? source.entry : {};
+    const targets = source.targets && typeof source.targets === "object" ? source.targets : {};
+    const rawBias = asText(source.bias);
+    const rawDirection = asText(entry.direction);
+    const rawLiquidityType = asText(liquidityTarget.type);
+    const rawConfidence = Number(source.confidence);
+
+    return {
+      currentState: asText(source.currentState),
+      bias: ["BULLISH", "BEARISH", "NEUTRAL"].includes(rawBias) ? rawBias : "NEUTRAL",
+      confidence: Number.isFinite(rawConfidence)
+        ? Math.round(Math.max(0, Math.min(100, rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
+        : 0,
+      nextMove: asText(source.nextMove),
+      expectedPath: asTextArray(source.expectedPath),
+      liquidityTarget: {
+        type: ["BUY_SIDE", "SELL_SIDE", "UNKNOWN"].includes(rawLiquidityType) ? rawLiquidityType : "UNKNOWN",
+        level: asText(liquidityTarget.level),
+        reason: asText(liquidityTarget.reason),
+      },
+      retracement: {
+        expected: Boolean(retracement.expected),
+        zone: asText(retracement.zone),
+        reason: asText(retracement.reason),
+      },
+      entry: {
+        direction: ["BUY", "SELL", "WAIT"].includes(rawDirection) ? rawDirection : "WAIT",
+        zone: asText(entry.zone),
+        confirmation: asText(entry.confirmation),
+      },
+      targets: {
+        tp1: asText(targets.tp1),
+        tp2: asText(targets.tp2),
+        final: asText(targets.final),
+      },
+      invalidation: asText(source.invalidation),
+      primaryScenario: asText(source.primaryScenario),
+      alternativeScenario: asText(source.alternativeScenario),
+      nextEvent: asText(source.nextEvent),
+      structuralEvidence: asTextArray(source.structuralEvidence),
+      warnings: asTextArray(source.warnings),
+    };
+  };
+
+  const parseJsonObject = (text: string) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("Model returned invalid JSON.");
+      return JSON.parse(match[0]);
+    }
   };
 
   const FORECAST_SYSTEM_PROMPT = `
@@ -469,6 +568,45 @@ The analysis should answer:
 7. What invalidates the forecast?
 `;
 
+  const stripCitationMarkers = (text: string) =>
+    text.replace(
+      /[\uE000-\uF8FF]*cite[\uE000-\uF8FF]*[A-Za-z0-9_-]+[\uE000-\uF8FF]*/gi,
+      (match) => (/[\uE000-\uF8FF]/.test(match) ? "" : match)
+    );
+
+  const mapGroqGrounding = (result: any) => {
+    const chunks: { web: { uri: string; title: string } }[] = [];
+    const seen = new Set<string>();
+    const add = (candidate: any) => {
+      if (!candidate || typeof candidate !== "object") return;
+      const uri = candidate.url || candidate.uri || candidate.source_url || candidate.link;
+      if (typeof uri !== "string" || !/^https?:\/\//i.test(uri) || seen.has(uri)) return;
+      seen.add(uri);
+      chunks.push({
+        web: {
+          uri,
+          title: String(candidate.title || candidate.name || candidate.source?.title || uri),
+        },
+      });
+    };
+    const visit = (value: any): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+      } else if (value && typeof value === "object") {
+        add(value);
+        Object.entries(value).forEach(([key, child]) => {
+          if (/citation|source|result|tool/i.test(key)) visit(child);
+        });
+      }
+    };
+
+    visit(result?.choices?.[0]?.message?.annotations);
+    visit(result?.choices?.[0]?.message?.citations);
+    visit(result?.choices?.[0]?.message?.executed_tools);
+    visit(result?.citations);
+    return chunks;
+  };
+
   // API Routes
   app.post("/api/knowledge/search", async (req, res) => {
     if (!checkAiClient(res)) return;
@@ -523,34 +661,53 @@ KNOWLEDGE RULES:
 - Knowledge cannot override observable market evidence.
 - If required confirmation is absent, return WAIT.
 
-Return ONLY valid JSON matching the requested forecast schema.`;
+Return ONLY valid JSON matching the requested forecast schema.${AI_PROVIDER === "groq" ? groqForecastSchemaPrompt : ""}`;
 
-      const result = await ai!.responses.create({
-        model: OPENAI_MODEL,
-        input: [{
-          role: "user",
-          content: [
-            { type: "input_image", image_url: `data:image/png;base64,${base64Image}`, detail: "auto" },
-            { type: "input_text", text: augmentedPrompt },
-          ],
-        }],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "forecast",
-            strict: true,
-            schema: forecastSchema,
+      let forecast: any;
+      if (AI_PROVIDER === "groq") {
+        const result = await groqAi!.chat.completions.create({
+          model: GROQ_VISION_MODEL,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: `data:image/png;base64,${base64Image}` } },
+              { type: "text", text: augmentedPrompt },
+            ],
+          }],
+          response_format: { type: "json_object" },
+        });
+        const text = result.choices[0]?.message?.content;
+        if (!text || typeof text !== "string") throw new Error("No response text from model");
+        forecast = normalizeForecast(parseJsonObject(text));
+      } else {
+        const result = await ai!.responses.create({
+          model: OPENAI_MODEL,
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_image", image_url: `data:image/png;base64,${base64Image}`, detail: "auto" },
+              { type: "input_text", text: augmentedPrompt },
+            ],
+          }],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "forecast",
+              strict: true,
+              schema: forecastSchema,
+            },
           },
-        },
-      });
+        });
 
-      const text = result.output_text;
-      if (!text) throw new Error("No response text from model");
-      const forecast = JSON.parse(text);
-      const rawConfidence = Number(forecast.confidence);
-      forecast.confidence = Number.isFinite(rawConfidence)
-        ? Math.round(Math.max(0, Math.min(100, rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
-        : 0;
+        const text = result.output_text;
+        if (!text) throw new Error("No response text from model");
+        forecast = JSON.parse(text);
+        const rawConfidence = Number(forecast.confidence);
+        forecast.confidence = Number.isFinite(rawConfidence)
+          ? Math.round(Math.max(0, Math.min(100, rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
+          : 0;
+      }
+
       res.json({
         analysis: JSON.stringify(forecast),
         forecast,
@@ -567,6 +724,27 @@ Return ONLY valid JSON matching the requested forecast schema.`;
     const { prompt, history } = req.body;
 
     try {
+      if (AI_PROVIDER === "groq") {
+        const result = await groqAi!.chat.completions.create({
+          model: GROQ_MODEL,
+          messages: [
+            { role: "system", content: FORECAST_SYSTEM_PROMPT },
+            ...((history || []).map((h: any) => ({
+              role: h.role === "model" || h.role === "assistant" ? "assistant" : "user",
+              content: h.parts?.[0]?.text || h.text || "",
+            }))),
+            { role: "user", content: prompt },
+          ],
+        });
+        const text = result.choices[0]?.message?.content;
+        if (!text || typeof text !== "string") throw new Error("No response text from model");
+        res.json({
+          text: stripCitationMarkers(text),
+          grounding: mapGroqGrounding(result),
+        });
+        return;
+      }
+
       const result = await ai!.responses.create({
         model: OPENAI_MODEL,
         instructions: FORECAST_SYSTEM_PROMPT,
@@ -600,12 +778,6 @@ Return ONLY valid JSON matching the requested forecast schema.`;
             )
           : []
       );
-      const stripCitationMarkers = (text: string) =>
-        text.replace(
-          /[\uE000-\uF8FF]*cite[\uE000-\uF8FF]*[A-Za-z0-9_-]+[\uE000-\uF8FF]*/gi,
-          (match) => (/[\uE000-\uF8FF]/.test(match) ? "" : match)
-        );
-
       res.json({
         text: stripCitationMarkers(result.output_text),
         grounding,

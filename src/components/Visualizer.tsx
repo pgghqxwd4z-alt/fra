@@ -310,7 +310,8 @@ Focus primarily on the future price path from the current market state.
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
-      alert("Forecast engine failure. Check API logs.");
+      const message = error instanceof Error ? error.message : "Unknown forecast error";
+      alert(`Forecast engine failure: ${message}`);
     } finally {
       setProcessing(false);
     }
