@@ -21,7 +21,7 @@ const MarketFeed: React.FC = () => {
     ws.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
       const symbol = data.s.toLowerCase();
-
+      
       setTickers(prev => ({
         ...prev,
         [symbol]: {

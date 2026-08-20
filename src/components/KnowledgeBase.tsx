@@ -3,7 +3,7 @@ import { BOOK_INSIGHTS } from '../constants';
 
 const KnowledgeBase: React.FC = () => {
   return (
-    <div className="space-y-8 pb-10 overflow-y-auto h-full custom-scrollbar">
+    <div className="space-y-8 pb-10">
       <div className="mb-12">
         <h2 className="text-4xl font-bold text-white mb-3 tracking-tighter">Wisdom Vault</h2>
         <p className="text-slate-500 text-lg max-w-2xl">Foundational psychology and risk management from the world's most successful traders.</p>

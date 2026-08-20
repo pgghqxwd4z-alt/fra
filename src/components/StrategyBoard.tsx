@@ -7,7 +7,7 @@ const StrategyBoard: React.FC = () => {
   const [selectedStrategy, setSelectedStrategy] = useState<TradingStrategy | null>(null);
 
   return (
-    <div className="space-y-12 overflow-y-auto h-full custom-scrollbar pb-8">
+    <div className="space-y-12">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div>
           <h2 className="text-4xl font-bold text-white mb-3 tracking-tighter">Strategy Hub</h2>
@@ -33,9 +33,9 @@ const StrategyBoard: React.FC = () => {
                 <p className="text-[10px] text-emerald-500/60 font-mono tracking-widest mt-1 uppercase">{strat.source}</p>
               </div>
             </div>
-
+            
             <p className="text-slate-400 text-sm leading-relaxed mb-8">{strat.description}</p>
-
+            
             <div className="mb-8">
               <h4 className="text-[10px] font-bold text-white/20 uppercase tracking-widest mb-4">Core Components</h4>
               <div className="flex flex-wrap gap-2">
@@ -48,7 +48,7 @@ const StrategyBoard: React.FC = () => {
             </div>
 
             <div className="mt-auto pt-6 border-t border-white/5">
-              <button
+              <button 
                 onClick={() => setSelectedStrategy(strat)}
                 className="w-full py-4 bg-white/5 hover:bg-emerald-500 hover:text-slate-950 text-emerald-500 rounded-2xl text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-3 border border-emerald-500/20 group-hover:border-emerald-500/50"
               >
@@ -61,9 +61,9 @@ const StrategyBoard: React.FC = () => {
       </div>
 
       {selectedStrategy && (
-        <Backtester
-          strategy={selectedStrategy}
-          onClose={() => setSelectedStrategy(null)}
+        <Backtester 
+          strategy={selectedStrategy} 
+          onClose={() => setSelectedStrategy(null)} 
         />
       )}
     </div>

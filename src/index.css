@@ -1,54 +1,54 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
 
 @layer base {
-  :root {
-    --radius: 0.5rem;
-  }
-
   body {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-
-  .font-mono {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    @apply bg-[#050507] text-slate-200 antialiased;
   }
 }
 
 @layer components {
   .glass-panel {
-    @apply bg-white/[0.02] backdrop-blur-xl border border-white/10 rounded-2xl;
+    @apply bg-slate-900/40 backdrop-blur-xl border border-white/5;
   }
-}
 
-@layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
-    width: 3px;
+    width: 4px;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
+    @apply bg-transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(16, 185, 129, 0.1);
-    border-radius: 10px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(16, 185, 129, 0.3);
+    @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
   }
 }
 
 @keyframes scroll {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
 }
 
 .animate-scroll {
+  display: flex;
+  width: max-content;
   animation: scroll 30s linear infinite;
+}
+
+.animate-scroll:hover {
+  animation-play-state: paused;
+}
+
+@keyframes neural-scan {
+  0% { top: 0; }
+  50% { top: 100%; }
+  100% { top: 0; }
+}
+
+.animate-neural-scan {
+  animation: neural-scan 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }

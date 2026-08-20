@@ -3,7 +3,7 @@ import { FRAMEWORK_STEPS } from '../constants';
 
 const Framework: React.FC = () => {
   return (
-    <div className="max-w-5xl mx-auto py-12 px-6 overflow-y-auto h-full custom-scrollbar">
+    <div className="max-w-5xl mx-auto py-12 px-6">
       <div className="mb-20 text-center">
         <h2 className="text-5xl font-bold text-white mb-6 tracking-tighter">Institutional Synthesis</h2>
         <p className="text-slate-500 text-xl max-w-2xl mx-auto leading-relaxed">A standard workflow for analyzing and executing trades based on multi-layered strategic logic.</p>

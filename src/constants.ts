@@ -3,11 +3,20 @@ import { TradingStrategy, BookInsight, FrameworkStep } from './types';
 export const TRADING_STRATEGIES: TradingStrategy[] = [
   {
     id: 'smc',
-    name: "Smart Money Concepts (SMC)",
-    description: "Institutional order tracking and liquidity analysis based on the Inner Circle Trader (ICT) methodology.",
+    name: "Smart Money Concepts",
+    description:
+      "Liquidity and market-structure analysis used to forecast the next price leg and identify conditional execution zones.",
     difficulty: "Advanced",
-    coreConcepts: ["Order Blocks", "Fair Value Gaps", "Liquidity Sweeps", "Market Structure Shifts"],
-    source: "ICT / Institutional"
+    coreConcepts: [
+      "Liquidity Pools",
+      "Liquidity Sweeps",
+      "Order Blocks",
+      "Fair Value Gaps",
+      "Displacement",
+      "BOS / CHoCH",
+      "Next-Move Forecast"
+    ],
+    source: "SMC / ICT"
   },
   {
     id: 'ppa',
@@ -19,11 +28,18 @@ export const TRADING_STRATEGIES: TradingStrategy[] = [
   },
   {
     id: 'gs',
-    name: "Institutional Overlay (Goldman Style)",
-    description: "Macro-fundamental combined with quantitative technical analysis used by top-tier investment banks.",
+    name: "Institutional / Macro Overlay",
+    description:
+      "Macro and liquidity analysis used to establish directional context and probabilistic price targets.",
     difficulty: "Advanced",
-    coreConcepts: ["Liquidity Voids", "Central Bank Divergence", "Institutional S/R", "COT Data"],
-    source: "Goldman Sachs Desk"
+    coreConcepts: [
+      "Liquidity Voids",
+      "Macro Flow",
+      "Institutional Zones",
+      "Inter-market Pressure",
+      "Directional Bias"
+    ],
+    source: "Institutional Analysis"
   }
 ];
 
@@ -52,28 +68,85 @@ export const BOOK_INSIGHTS: BookInsight[] = [
 ];
 
 export const FRAMEWORK_STEPS: FrameworkStep[] = [
+
   {
     title: "Psychological Foundation",
-    source: "Mark Douglas / Douglas-Schwager Axis",
-    description: "Initialize the probabilistic mindset. Accept that anything can happen on any individual trade.",
-    details: ["Accepting Randomness", "Risk-First Mentality", "Outcome Detachment"]
+    source: "Douglas / Schwager",
+    description:
+      "Establish probabilistic thinking and eliminate the need to predict with certainty.",
+    details: [
+      "Accept Uncertainty",
+      "Risk First",
+      "Outcome Detachment",
+      "System Discipline"
+    ]
   },
+
   {
     title: "Institutional Narrative",
-    source: "Goldman Sachs Strategy",
-    description: "Analyze central bank policy and institutional liquidity voids to find the 'True North' of the market.",
-    details: ["Inter-market Flow", "Liquidity Voids", "Macro Divergence"]
+    source: "Institutional / Macro Overlay",
+    description:
+      "Determine the broader directional pressure and identify areas where liquidity may attract price.",
+    details: [
+      "Macro Flow",
+      "Liquidity Voids",
+      "Inter-market Pressure",
+      "Higher-Timeframe Bias"
+    ]
   },
+
+  {
+    title: "Liquidity Mapping",
+    source: "SMC",
+    description:
+      "Map buy-side and sell-side liquidity and determine which liquidity remains available to price.",
+    details: [
+      "Buy-side Liquidity",
+      "Sell-side Liquidity",
+      "Liquidity Pools",
+      "Sweeps"
+    ]
+  },
+
   {
     title: "Structural Framework",
     source: "SMC Mechanics",
-    description: "Map the narrative of institutional positions on the high timeframe (HTF).",
-    details: ["Order Blocks", "FVG Imbalances", "Institutional Flow"]
+    description:
+      "Identify the structural zones capable of producing the next displacement.",
+    details: [
+      "Order Blocks",
+      "FVG",
+      "BOS",
+      "CHoCH",
+      "Displacement"
+    ]
   },
+
+  {
+    title: "Forward Forecast",
+    source: "QuantSage Forecast Engine",
+    description:
+      "Convert current structure and liquidity into a probabilistic forecast of the next price path.",
+    details: [
+      "Next Move",
+      "Liquidity Target",
+      "Expected Retracement",
+      "Scenario Probability"
+    ]
+  },
+
   {
     title: "Tactical Execution",
     source: "Pure Price Action",
-    description: "Identify the high-probability trigger at pre-defined institutional zones.",
-    details: ["LTF Confirmation", "CHoCH/BOS", "Candlestick Triggers"]
+    description:
+      "Wait for confirmation at the forecasted institutional zone before considering execution.",
+    details: [
+      "LTF Confirmation",
+      "Entry Zone",
+      "Risk",
+      "Invalidation",
+      "Targets"
+    ]
   }
+
 ];

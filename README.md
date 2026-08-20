@@ -1,50 +1,34 @@
-# React + TypeScript + Vite
+# QuantSage
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+QuantSage is a React and Express trading analysis terminal.
 
-Currently, two official plugins are available:
+## Prerequisites
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Node.js 20.18.1
+- npm 10.8.2
+- An OpenAI API key, or a Groq API key when using Groq
 
-## Expanding the ESLint configuration
+## Setup
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```sh
+cp .env.example .env
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+Set `AI_PROVIDER` to `openai` (the default) or `groq`, then provide the
+corresponding API key in `.env`.
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
+For OpenAI, `OPENAI_MODEL` is optional. For Groq, `GROQ_MODEL` and
+`GROQ_VISION_MODEL` are optional and default to `groq/compound` and
+`qwen/qwen3.6-27b`.
 
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
+```sh
+npm install
+npm run dev
+```
+
+The development server runs on port 3000. To build and run the production server:
+
+```sh
+npm run build
+npm start
 ```
