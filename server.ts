@@ -219,7 +219,10 @@ Convert the material above into the requested JSON schema. Return JSON only.`,
     properties: {
       currentState: { type: "string" },
       bias: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] },
-      confidence: { type: "number" },
+      confidence: {
+        type: "number",
+        description: "An integer confidence percentage from 0 to 100.",
+      },
       nextMove: { type: "string" },
       expectedPath: { type: "array", items: { type: "string" } },
       liquidityTarget: {
@@ -543,9 +546,14 @@ Return ONLY valid JSON matching the requested forecast schema.`;
 
       const text = result.output_text;
       if (!text) throw new Error("No response text from model");
+      const forecast = JSON.parse(text);
+      const rawConfidence = Number(forecast.confidence);
+      forecast.confidence = Number.isFinite(rawConfidence)
+        ? Math.round(Math.max(0, Math.min(100, rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
+        : 0;
       res.json({
-        analysis: text,
-        forecast: JSON.parse(text),
+        analysis: JSON.stringify(forecast),
+        forecast,
         knowledge: { items: knowledge.items, warnings: knowledge.warnings },
       });
     } catch (error: any) {
@@ -564,10 +572,16 @@ Return ONLY valid JSON matching the requested forecast schema.`;
         instructions: FORECAST_SYSTEM_PROMPT,
         tools: [{ type: "web_search" }],
         input: [
-          ...((history || []).map((h: any) => ({
-            role: h.role === "model" ? "assistant" : h.role,
-            content: [{ type: "input_text", text: h.parts?.[0]?.text || h.text || "" }],
-          }))),
+          ...((history || []).map((h: any) => {
+            const isAssistant = h.role === "model" || h.role === "assistant";
+            return {
+              role: isAssistant ? "assistant" : "user",
+              content: [{
+                type: isAssistant ? "output_text" : "input_text",
+                text: h.parts?.[0]?.text || h.text || "",
+              }],
+            };
+          })),
           {
             role: "user",
             content: [{ type: "input_text", text: prompt }],
@@ -586,8 +600,14 @@ Return ONLY valid JSON matching the requested forecast schema.`;
             )
           : []
       );
+      const stripCitationMarkers = (text: string) =>
+        text.replace(
+          /[\uE000-\uF8FF]*cite[\uE000-\uF8FF]*[A-Za-z0-9_-]+[\uE000-\uF8FF]*/gi,
+          (match) => (/[\uE000-\uF8FF]/.test(match) ? "" : match)
+        );
+
       res.json({
-        text: result.output_text,
+        text: stripCitationMarkers(result.output_text),
         grounding,
       });
     } catch (error: any) {
