@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { aiService } from '../services/aiService';
 import { Message } from '../types';
 
@@ -82,7 +83,29 @@ const TradingSage: React.FC = () => {
               <div className="flex items-center gap-2 mb-1.5 opacity-40 text-[9px] uppercase font-mono tracking-widest">
                 <span>{msg.role === 'user' ? 'Trader' : 'SAGE'}</span>
               </div>
-              <p className="whitespace-pre-wrap leading-relaxed text-xs lg:text-sm">{msg.content}</p>
+              {msg.role === 'user' ? (
+                <p className="whitespace-pre-wrap leading-relaxed text-xs lg:text-sm">{msg.content}</p>
+              ) : (
+                <div className="text-xs lg:text-sm leading-relaxed break-words [&_p]:mb-2 [&_p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:my-0.5 [&_h1]:mb-2 [&_h1]:text-sm [&_h1]:font-bold [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-bold [&_code]:rounded [&_code]:bg-black/40 [&_code]:px-1 [&_code]:text-emerald-300 [&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-black/40 [&_pre]:p-2">
+                  <ReactMarkdown
+                    skipHtml
+                    components={{
+                      a: ({ children, ...props }) => (
+                        <a
+                          {...props}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-emerald-400 underline decoration-emerald-500/40 underline-offset-2 break-all hover:text-emerald-300"
+                        >
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
+                </div>
+              )}
               
               {msg.groundingMetadata && (
                 <div className="mt-3 pt-3 border-t border-white/5 flex flex-wrap gap-1.5">

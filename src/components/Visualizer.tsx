@@ -4,19 +4,144 @@ import { ForecastResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
-const ForecastCard: React.FC<{
-  label: string;
-  value: string;
-}> = ({ label, value }) => (
-  <div className="bg-slate-950/60 rounded-xl p-3 border border-white/5">
-    <div className="text-[7px] text-white/25 uppercase tracking-widest mb-1">
-      {label}
+const nonEmpty = (value: string | undefined | null) => value?.trim() || null;
+const sentence = (value: string | undefined | null) => nonEmpty(value)?.replace(/[.!?]+$/, '') || null;
+
+const ForecastDetails: React.FC<{
+  forecast: ForecastResult;
+  variant: 'compact' | 'fullscreen';
+}> = ({ forecast, variant }) => {
+  const compact = variant === 'compact';
+  const sectionClass = compact
+    ? 'bg-black/20 border border-white/5 rounded-lg p-2.5'
+    : 'p-5 rounded-2xl bg-slate-900/50 border border-white/5';
+  const labelClass = compact
+    ? 'text-[6px] text-white/30 uppercase tracking-widest font-bold mb-1'
+    : 'text-[8px] text-white/30 uppercase tracking-widest mb-2';
+  const valueClass = compact
+    ? 'text-[8px] text-slate-300 leading-relaxed'
+    : 'text-sm text-slate-200 leading-relaxed';
+  const sectionTitleClass = compact
+    ? 'text-[6px] text-emerald-400 uppercase tracking-widest font-bold mb-1'
+    : 'text-[10px] text-emerald-400 uppercase tracking-[0.25em] font-bold mb-3';
+  const gridClass = compact ? 'grid grid-cols-2 gap-1.5' : 'grid grid-cols-2 gap-4';
+  const entry = [
+    nonEmpty(forecast.entry?.direction),
+    nonEmpty(forecast.entry?.zone),
+  ].filter(Boolean).join(' ');
+  const liquidity = [
+    nonEmpty(forecast.liquidityTarget?.type),
+    nonEmpty(forecast.liquidityTarget?.level),
+  ].filter(Boolean).join(' ');
+  const retracement = [
+    forecast.retracement?.expected === true ? 'Expected' : forecast.retracement?.expected === false ? 'Not expected' : null,
+    nonEmpty(forecast.retracement?.zone),
+    nonEmpty(forecast.retracement?.reason),
+  ].filter(Boolean).join(' · ');
+  const evidence = (forecast.structuralEvidence || []).map(nonEmpty).filter(Boolean) as string[];
+  const warnings = (forecast.warnings || []).map(nonEmpty).filter(Boolean) as string[];
+
+  const Field: React.FC<{ label: string; value: string | null }> = ({ label, value }) => {
+    if (!value) return null;
+    return (
+      <div className={sectionClass}>
+        <div className={labelClass}>{label}</div>
+        <div className={valueClass}>{value}</div>
+      </div>
+    );
+  };
+
+  return (
+    <div className={compact ? 'space-y-2.5' : 'space-y-8'}>
+      {nonEmpty(forecast.currentState) && (
+        <section className={sectionClass}>
+          <div className={sectionTitleClass}>Current State</div>
+          <p className={compact ? valueClass : 'text-lg text-white leading-relaxed'}>{forecast.currentState}</p>
+        </section>
+      )}
+
+      {nonEmpty(forecast.nextMove) && (
+        <section className={sectionClass}>
+          <div className={sectionTitleClass}>{compact ? 'Next Leg' : 'Primary Tactical Objective'}</div>
+          <p className={compact ? 'text-[10px] text-white font-semibold leading-relaxed' : 'text-2xl font-bold text-white leading-tight'}>{forecast.nextMove}</p>
+        </section>
+      )}
+
+      {forecast.expectedPath?.some(nonEmpty) && (
+        <section>
+          <div className={compact ? 'text-[6px] text-white/30 uppercase tracking-widest font-bold mb-1.5' : 'text-[10px] text-white/30 uppercase tracking-[0.4em] font-bold mb-4'}>Anticipated Price Path</div>
+          <div className={compact ? 'space-y-1' : 'space-y-4'}>
+            {forecast.expectedPath.map((step, index) => {
+              const value = nonEmpty(step);
+              if (!value) return null;
+              return (
+                <div key={index} className={compact ? 'flex items-center gap-1.5' : 'flex gap-6 group'}>
+                  <span className={compact ? 'text-[7px] text-emerald-500 font-mono' : 'text-sm text-emerald-500 font-mono shrink-0 mt-0.5'}>{String(index + 1).padStart(2, '0')}</span>
+                  <div className={compact ? 'text-[8px] text-slate-300' : 'flex-1 pb-4 border-b border-white/5 group-last:border-0 text-lg text-slate-200'}>{value}</div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <div className={gridClass}>
+        <Field label="Entry" value={entry || null} />
+        <Field label="Next Event" value={nonEmpty(forecast.nextEvent)} />
+        <Field label="Liquidity Target" value={liquidity || null} />
+        <Field label="Invalidation" value={nonEmpty(forecast.invalidation)} />
+      </div>
+
+      <Field label="Liquidity Rationale" value={nonEmpty(forecast.liquidityTarget?.reason)} />
+      <Field label="Retracement" value={retracement || null} />
+      <Field label="Entry Confirmation" value={nonEmpty(forecast.entry?.confirmation)} />
+
+      {(nonEmpty(forecast.targets?.tp1) || nonEmpty(forecast.targets?.tp2) || nonEmpty(forecast.targets?.final)) && (
+        <div className={compact ? 'grid grid-cols-3 gap-1.5' : 'grid grid-cols-3 gap-3'}>
+          <Field label="TP1" value={nonEmpty(forecast.targets?.tp1)} />
+          <Field label="TP2" value={nonEmpty(forecast.targets?.tp2)} />
+          <Field label="Final Target" value={nonEmpty(forecast.targets?.final)} />
+        </div>
+      )}
+
+      {evidence.length > 0 && (
+        <section className={sectionClass}>
+          <div className={sectionTitleClass}>Structural Evidence</div>
+          <ul className={compact ? 'space-y-1' : 'space-y-2'}>
+            {evidence.map((item, index) => (
+              <li key={index} className={`${valueClass} flex gap-2`}>
+                <span className="text-emerald-500 font-mono shrink-0">•</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <Field label="Primary Scenario" value={nonEmpty(forecast.primaryScenario)} />
+      <Field label="Alternative Scenario" value={nonEmpty(forecast.alternativeScenario)} />
+
+      {warnings.length > 0 && (
+        <section className={compact ? 'space-y-1' : 'space-y-2'}>
+          {warnings.map((warning, index) => (
+            <div key={index} className="text-[8px] text-rose-400/80">⚠ {warning}</div>
+          ))}
+        </section>
+      )}
     </div>
-    <div className="text-[9px] text-white font-mono leading-relaxed">
-      {value}
-    </div>
-  </div>
-);
+  );
+};
+
+const buildNeuralInsights = (forecast: ForecastResult | null) => {
+  if (!forecast) return 'No structured forecast is available yet. Run an analysis to generate institutional insights.';
+  const insights = [
+    sentence(forecast.currentState) && `Current state: ${sentence(forecast.currentState)}.`,
+    sentence(forecast.nextMove) && `The next move is most likely to be ${sentence(forecast.nextMove)}.`,
+    sentence(forecast.primaryScenario) && `Primary thesis: ${sentence(forecast.primaryScenario)}.`,
+    sentence(forecast.alternativeScenario) && `If conditions change, the alternative scenario is ${sentence(forecast.alternativeScenario)}.`,
+  ].filter(Boolean);
+  return insights.join(' ') || 'The forecast returned no narrative insights.';
+};
 
 const ConfigHeaderIcon = () => (
   <div className="relative w-8 h-8 flex items-center justify-center group/icon shrink-0">
@@ -361,53 +486,7 @@ Focus primarily on the future price path from the current market state.
                   </div>
                 </div>
 
-                <div className="mb-3 p-2.5 rounded-lg bg-black/30 border border-white/5">
-                  <div className="text-[6px] text-emerald-400 uppercase tracking-widest font-bold mb-1">Next Leg</div>
-                  <p className="text-[10px] text-white font-semibold leading-relaxed">{forecast.nextMove}</p>
-                </div>
-
-                <div className="mb-3">
-                  <div className="text-[6px] text-white/30 uppercase tracking-widest font-bold mb-1.5">Path</div>
-                  <div className="space-y-1">
-                    {forecast.expectedPath.map((step, index) => (
-                      <div key={index} className="flex items-center gap-1.5">
-                        <span className="text-[7px] text-emerald-500 font-mono">{String(index + 1).padStart(2, '0')}</span>
-                        <span className="text-[8px] text-slate-300">{step}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5 mb-2.5">
-                  <ForecastCard label="ENTRY" value={`${forecast.entry.direction} ${forecast.entry.zone}`} />
-                  <ForecastCard label="NEXT" value={forecast.nextEvent} />
-                  <ForecastCard label="LIQ" value={`${forecast.liquidityTarget.type} ${forecast.liquidityTarget.level}`} />
-                  <ForecastCard label="INVALID" value={forecast.invalidation} />
-                </div>
-
-                <div className="grid grid-cols-3 gap-1.5">
-                  <ForecastCard label="TP1" value={forecast.targets.tp1} />
-                  <ForecastCard label="TP2" value={forecast.targets.tp2} />
-                  <ForecastCard label="TP3" value={forecast.targets.final} />
-                </div>
-
-                <div className="mt-3 p-2.5 rounded-lg bg-black/20 border border-white/5">
-                  <div className="text-[6px] text-emerald-400 uppercase tracking-widest font-bold mb-1">Primary</div>
-                  <p className="text-[8px] text-slate-300 leading-relaxed">{forecast.primaryScenario}</p>
-                </div>
-
-                <div className="mt-1.5 p-2.5 rounded-lg bg-black/20 border border-white/5">
-                  <div className="text-[6px] text-amber-400 uppercase tracking-widest font-bold mb-1">Alt</div>
-                  <p className="text-[8px] text-slate-400 leading-relaxed">{forecast.alternativeScenario}</p>
-                </div>
-
-                {forecast.warnings.length > 0 && (
-                  <div className="mt-3">
-                    {forecast.warnings.map((warning, index) => (
-                      <div key={index} className="text-[8px] text-rose-400/80 mt-1">⚠ {warning}</div>
-                    ))}
-                  </div>
-                )}
+                <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
             
@@ -461,7 +540,7 @@ Focus primarily on the future price path from the current market state.
               </div>
             </div>
 
-            {analysis && (
+            {(analysis || forecast) && (
               <div className="glass-panel rounded-2xl p-3.5 border border-emerald-500/20 bg-emerald-500/[0.05] backdrop-blur-2xl shrink-0">
                 <div className="flex items-center gap-2 mb-2 border-b border-emerald-500/10 pb-2">
                   <div className="w-5 h-5 rounded bg-emerald-500/20 flex items-center justify-center border border-emerald-500/30">
@@ -470,7 +549,7 @@ Focus primarily on the future price path from the current market state.
                   <h3 className="text-[8px] font-bold text-white uppercase tracking-widest">Neural Insights</h3>
                 </div>
                 <div className="text-slate-300 text-[10px] leading-relaxed prose prose-invert max-w-none whitespace-pre-wrap font-sans max-h-48 overflow-y-auto custom-scrollbar">
-                  {analysis}
+                  {buildNeuralInsights(forecast)}
                 </div>
               </div>
             )}
@@ -543,43 +622,7 @@ Focus primarily on the future price path from the current market state.
                 <div className="flex items-center lg:justify-end gap-3 text-xs font-mono tracking-widest text-white/30">{forecast.confidence}% CONFIDENCE RATING</div>
               </div>
             </div>
-            <div className="grid lg:grid-cols-12 gap-10">
-              <div className="lg:col-span-7 space-y-10">
-                <section>
-                  <h4 className="text-[10px] text-emerald-400 uppercase tracking-[0.4em] font-bold mb-4">Primary Tactical Objective</h4>
-                  <p className="text-2xl font-bold text-white leading-tight">{forecast.nextMove}</p>
-                </section>
-                <section>
-                  <h4 className="text-[10px] text-white/30 uppercase tracking-[0.4em] font-bold mb-6">Anticipated Price Path</h4>
-                  <div className="space-y-4">
-                    {forecast.expectedPath.map((step, idx) => (
-                      <div key={idx} className="flex gap-6 group">
-                        <span className="text-sm text-emerald-500 font-mono shrink-0 mt-0.5">{String(idx + 1).padStart(2, '0')}</span>
-                        <div className="flex-1 pb-4 border-b border-white/5 group-last:border-0 text-lg text-slate-200">{step}</div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </div>
-              <div className="lg:col-span-5 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-5 rounded-2xl bg-slate-900/50 border border-white/5"><p className="text-[8px] text-white/30 uppercase tracking-widest mb-2">Signal</p><p className="text-xl font-bold text-white">{forecast.entry.direction}</p></div>
-                  <div className="p-5 rounded-2xl bg-slate-900/50 border border-white/5"><p className="text-[8px] text-white/30 uppercase tracking-widest mb-2">Next</p><p className="text-xl font-bold text-white">{forecast.nextEvent}</p></div>
-                </div>
-                <div className="p-8 rounded-[1.5rem] bg-emerald-500/5 border border-emerald-500/20">
-                  <h4 className="text-[10px] text-emerald-400 uppercase tracking-widest font-bold mb-6">Conditional Entry</h4>
-                  <div className="space-y-6">
-                    <div><p className="text-[8px] text-white/30 uppercase tracking-widest mb-1">Zone</p><p className="text-2xl font-mono text-white">{forecast.entry.zone}</p></div>
-                    <div><p className="text-[8px] text-white/30 uppercase tracking-widest mb-1">Confirm</p><p className="text-sm text-slate-300 italic">{forecast.entry.confirmation}</p></div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="p-4 rounded-xl bg-slate-900/80 border border-white/5"><p className="text-[8px] text-white/20 uppercase tracking-widest mb-1">TP1</p><p className="text-sm font-mono text-white">{forecast.targets.tp1}</p></div>
-                  <div className="p-4 rounded-xl bg-slate-900/80 border border-white/5"><p className="text-[8px] text-white/20 uppercase tracking-widest mb-1">TP2</p><p className="text-sm font-mono text-white">{forecast.targets.tp2}</p></div>
-                  <div className="p-4 rounded-xl bg-emerald-500/20 border border-emerald-500/30"><p className="text-[8px] text-emerald-400 uppercase tracking-widest mb-1">TP3</p><p className="text-sm font-mono text-emerald-400">{forecast.targets.final}</p></div>
-                </div>
-              </div>
-            </div>
+            <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>
       )}
