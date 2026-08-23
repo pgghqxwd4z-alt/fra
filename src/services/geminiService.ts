@@ -306,7 +306,7 @@ function estimateGroqPromptTokens(messages: GroqMessage[], imageDimensions?: Ima
       } else {
         const width = imageDimensions?.width || 1024;
         const height = imageDimensions?.height || 1024;
-        imageTokens += Math.min(4096, Math.max(256, Math.ceil((width * height) / 256)));
+        imageTokens += Math.min(4096, Math.max(256, Math.ceil((width * height) / 600) + 200));
       }
     }
   }
