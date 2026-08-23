@@ -10,19 +10,28 @@ const TradingSage: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const welcome: Message = {
+      role: 'model',
+      content:
+        "Welcome to the QuantSage Institutional Forecast Terminal. " +
+        "I analyze current market structure, liquidity, displacement and " +
+        "institutional reaction zones to determine the most likely NEXT price move.",
+      timestamp: Date.now()
+    };
     const saved = localStorage.getItem('quantsage_chat_history');
     if (saved) {
-      setMessages(JSON.parse(saved));
-    } else {
-      setMessages([{
-        role: 'model',
-        content:
-          "Welcome to the QuantSage Institutional Forecast Terminal. " +
-          "I analyze current market structure, liquidity, displacement and " +
-          "institutional reaction zones to determine the most likely NEXT price move.",
-        timestamp: Date.now()
-      }]);
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setMessages(parsed);
+          return;
+        }
+        localStorage.removeItem('quantsage_chat_history');
+      } catch {
+        localStorage.removeItem('quantsage_chat_history');
+      }
     }
+    setMessages([welcome]);
   }, []);
 
   useEffect(() => {

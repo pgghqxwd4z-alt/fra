@@ -76,9 +76,14 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
     const saved = localStorage.getItem('quantsage_backtest_history');
     if (saved) {
       try {
-        setHistory(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse history", e);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setHistory(parsed);
+        } else {
+          localStorage.removeItem('quantsage_backtest_history');
+        }
+      } catch {
+        localStorage.removeItem('quantsage_backtest_history');
       }
     }
   }, []);
