@@ -12,6 +12,7 @@ const GROQ_TPM_SAFETY_MARGIN = 300;
 const GROQ_MAX_TOKENS_FLOOR = 800;
 const GROQ_MAX_TOKENS_CAP = 4096;
 const GROQ_HEALTHCHECK_MAX_TOKENS = 64;
+const GROQ_CALIBRATION_MAX_TOKENS = 300;
 const GROQ_FORCE_FULL_PIPELINE = import.meta.env.VITE_GROQ_FORCE_FULL_PIPELINE === 'true';
 const GROQ_LOW_CAPACITY_MODE = GROQ_TPM_LIMIT <= 10000 && !GROQ_FORCE_FULL_PIPELINE;
 const groqTokenReservations: { timestamp: number; reservedTokens: number }[] = [];
@@ -286,8 +287,23 @@ interface ImageDimensions {
   height: number;
 }
 
-interface ModelImageInfo extends ImageDimensions {
+interface ModelImageCropInfo extends ImageDimensions {
   mimeType: string;
+  base64: string;
+}
+
+interface ModelImageInfo extends ModelImageCropInfo {
+  priceScale?: ModelImageCropInfo;
+}
+
+interface PriceScaleCalibration {
+  tickValues: string[];
+  currentPrice?: string;
+  instrument?: string;
+  timeframe?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  precision?: number;
 }
 
 function estimateGroqPromptTokens(messages: GroqMessage[], imageDimensions?: ImageDimensions): number {
@@ -314,14 +330,18 @@ function estimateGroqPromptTokens(messages: GroqMessage[], imageDimensions?: Ima
   return Math.max(1, Math.ceil(textCharacters / 4) + imageTokens);
 }
 
-function getMaxTokensForPrompt(promptEstimate: number): number {
+function getMaxTokensForPrompt(
+  promptEstimate: number,
+  tokenFloor: number = GROQ_MAX_TOKENS_FLOOR,
+  tokenCap: number = GROQ_MAX_TOKENS_CAP
+): number {
   const available = GROQ_TPM_LIMIT - promptEstimate - GROQ_TPM_SAFETY_MARGIN;
-  if (available < GROQ_MAX_TOKENS_FLOOR) {
+  if (available < tokenFloor) {
     throw new Error(
       `Groq request cannot fit within the ${GROQ_TPM_LIMIT}-token budget (estimated prompt: ${promptEstimate} tokens).`
     );
   }
-  return Math.min(GROQ_MAX_TOKENS_CAP, Math.max(GROQ_MAX_TOKENS_FLOOR, Math.floor(available)));
+  return Math.min(tokenCap, Math.max(tokenFloor, Math.floor(available)));
 }
 
 async function reserveGroqTokens(
@@ -825,12 +845,14 @@ async function callGroq(
   model: string = GROQ_MODELS.text,
   maxRetries: number = 3,
   stage: string = 'unknown',
-  imageDimensions?: ImageDimensions
+  imageDimensions?: ImageDimensions,
+  tokenFloor: number = GROQ_MAX_TOKENS_FLOOR,
+  tokenCap: number = GROQ_MAX_TOKENS_CAP
 ): Promise<string> {
   const promptEstimate = estimateGroqPromptTokens(messages, imageDimensions);
   let maxTokens: number;
   try {
-    maxTokens = getMaxTokensForPrompt(promptEstimate);
+    maxTokens = getMaxTokensForPrompt(promptEstimate, tokenFloor, tokenCap);
   } catch (error) {
     const containsImage = messages.some(message =>
       Array.isArray(message.content) && message.content.some(part => part.type === 'image_url')
@@ -890,10 +912,10 @@ async function callGroq(
       if (response.status === 413) {
         const body = await response.text();
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        if (!oversizeRetryUsed && maxTokens > GROQ_MAX_TOKENS_FLOOR) {
+        if (!oversizeRetryUsed && maxTokens > tokenFloor) {
           releaseGroqTokens(reservation);
           oversizeRetryUsed = true;
-          maxTokens = GROQ_MAX_TOKENS_FLOOR;
+          maxTokens = tokenFloor;
           console.warn(`[Orchestrator] Request too large on ${stage}. Retrying once with max_tokens=${maxTokens}.`);
           continue;
         }
@@ -1082,7 +1104,118 @@ function normalizeForecast(text: string): ForecastResult | undefined {
   };
 }
 
-function buildForecastMessages(prompt: string, analysisParts: string[]): GroqMessage[] {
+function parsePriceNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value !== 'string') return undefined;
+  const match = value.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  if (!match) return undefined;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function getPricePrecision(value: string): number | undefined {
+  const match = value.replace(/,/g, '').match(/\.(\d+)/);
+  return match ? match[1].length : undefined;
+}
+
+function normalizePriceCalibration(text: string): PriceScaleCalibration | undefined {
+  const parsed = extractJsonObject(text);
+  if (!parsed) return undefined;
+
+  const stringArray = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim())
+      : [];
+  const optionalText = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const tickValues = stringArray(parsed.tickValues ?? parsed.ticks);
+  const currentPrice = optionalText(parsed.currentPrice);
+  const instrument = optionalText(parsed.instrument);
+  const timeframe = optionalText(parsed.timeframe);
+  const numericTicks = tickValues.map(parsePriceNumber).filter((value): value is number => value !== undefined);
+  const minPrice = parsePriceNumber(parsed.minPrice) ?? (numericTicks.length > 0 ? Math.min(...numericTicks) : undefined);
+  const maxPrice = parsePriceNumber(parsed.maxPrice) ?? (numericTicks.length > 0 ? Math.max(...numericTicks) : undefined);
+  const tickPrecisions = tickValues.map(getPricePrecision).filter((value): value is number => value !== undefined);
+  const precisionValue = parsePriceNumber(parsed.precision);
+  const precision = precisionValue !== undefined
+    ? Math.max(0, Math.min(10, Math.round(precisionValue)))
+    : tickPrecisions.length > 0 ? Math.max(...tickPrecisions) : undefined;
+
+  if (tickValues.length === 0 && !currentPrice && !instrument && !timeframe && minPrice === undefined && maxPrice === undefined) {
+    return undefined;
+  }
+  return { tickValues, currentPrice, instrument, timeframe, minPrice, maxPrice, precision };
+}
+
+function formatPriceScaleContext(calibration?: PriceScaleCalibration): string {
+  if (!calibration) {
+    return `AUTHORITATIVE PRICE SCALE:
+The chart price scale is unreadable or calibration failed. Do not invent exact numeric prices. Describe levels relatively (for example, "recent swing high", "prior support", or "upper liquidity") and explicitly mark any estimate as approximate.`;
+  }
+
+  const ticks = calibration.tickValues.length > 0 ? calibration.tickValues.join(', ') : 'not readable';
+  const range = calibration.minPrice !== undefined && calibration.maxPrice !== undefined
+    ? `${calibration.minPrice} to ${calibration.maxPrice}`
+    : 'not available';
+  const precision = calibration.precision !== undefined ? calibration.precision : 'not established';
+  return `AUTHORITATIVE PRICE SCALE (transcribed from the native-resolution right axis):
+Tick values top-to-bottom: ${ticks}
+Highlighted current/last price: ${calibration.currentPrice || 'not readable'}
+Instrument: ${calibration.instrument || 'not readable'}
+Timeframe: ${calibration.timeframe || 'not readable'}
+Visible numeric range: ${range}
+Visible decimal precision: ${precision}
+Derive every quoted level by interpolating THIS scale only. Quoted levels must remain within the visible minimum and maximum and must match its decimal precision. If a level cannot be read or derived reliably, describe it as approximate or relatively (for example, "recent swing high", "prior support", or "upper liquidity") instead of fabricating an exact number.`;
+}
+
+function extractPlausiblePriceNumbers(value: string, minPrice: number, maxPrice: number): number[] {
+  const matches = [...value.matchAll(/(?<![A-Za-z])-?\d[\d,]*(?:\.\d+)?/g)];
+  const lowerMagnitude = minPrice >= 0 ? minPrice / 10 : undefined;
+  const upperMagnitude = maxPrice >= 0 ? maxPrice * 10 : undefined;
+  return matches
+    .filter(match => {
+      const suffix = value.slice((match.index || 0) + match[0].length);
+      return !/^\s*(?:%|R\b|[mhdw]\b|hours?\b|candles?\b|bars?\b|pips?\b|ticks?\b)/i.test(suffix);
+    })
+    .map(match => parsePriceNumber(match[0]))
+    .filter((number): number is number => number !== undefined)
+    .filter(number =>
+      (lowerMagnitude === undefined || number >= lowerMagnitude) &&
+      (upperMagnitude === undefined || number <= upperMagnitude)
+    );
+}
+
+function addPriceScaleWarnings(forecast: ForecastResult, calibration?: PriceScaleCalibration): ForecastResult {
+  if (calibration?.minPrice === undefined || calibration.maxPrice === undefined) return forecast;
+  const minPrice = Math.min(calibration.minPrice, calibration.maxPrice);
+  const maxPrice = Math.max(calibration.minPrice, calibration.maxPrice);
+  const precision = calibration.precision ?? 0;
+  const tolerance = Math.max((maxPrice - minPrice) * 0.01, Math.pow(10, -precision) / 2);
+  const fields: Array<[string, string]> = [
+    ['liquidity target', forecast.liquidityTarget.level],
+    ['retracement zone', forecast.retracement.zone],
+    ['entry zone', forecast.entry.zone],
+    ['TP1', forecast.targets.tp1],
+    ['TP2', forecast.targets.tp2],
+    ['final target', forecast.targets.final],
+    ['invalidation', forecast.invalidation],
+  ];
+  const warnings = [...forecast.warnings];
+  for (const [label, value] of fields) {
+    for (const quotedPrice of extractPlausiblePriceNumbers(value, minPrice, maxPrice)) {
+      if (quotedPrice < minPrice - tolerance || quotedPrice > maxPrice + tolerance) {
+        warnings.push(
+          `Forecast quoted price ${quotedPrice} in ${label} falls outside the calibrated visible scale (${minPrice}–${maxPrice}); verify it against the chart.`
+        );
+      }
+    }
+  }
+  return { ...forecast, warnings: [...new Set(warnings)] };
+}
+
+function buildForecastMessages(prompt: string, analysisParts: string[], priceScaleContext: string): GroqMessage[] {
   const schemaInstruction = `Return ONLY one JSON object with exactly these keys and value types:
 {
   "currentState": "string",
@@ -1103,7 +1236,7 @@ function buildForecastMessages(prompt: string, analysisParts: string[]): GroqMes
 }
 All keys are required. Do not include markdown, code fences, commentary, or any other keys.`;
   const messages: GroqMessage[] = [
-    { role: 'system', content: `${FORECAST_SYSTEM_PROMPT}\n\n${schemaInstruction}` },
+    { role: 'system', content: `${FORECAST_SYSTEM_PROMPT}\n\n${priceScaleContext}\n\n${schemaInstruction}` },
   ];
   const evidence = analysisParts.map((part, index) => ({
     label: `--- EVIDENCE ${index + 1} ---\n`,
@@ -1124,6 +1257,93 @@ All keys are required. Do not include markdown, code fences, commentary, or any 
     messages[1] = { role: 'user', content: buildUserContent() };
   }
   return messages;
+}
+
+function buildCalibrationMessages(crop: ModelImageCropInfo): GroqMessage[] {
+  return [
+    {
+      role: 'system',
+      content: `You are a chart price-scale transcription engine. Read only information visibly printed in the supplied right-side price-axis crop. Do not infer, interpolate, or fabricate values. Missing or unreadable fields must be omitted.`
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'image_url',
+          image_url: { url: `data:${crop.mimeType};base64,${crop.base64}` }
+        },
+        {
+          type: 'text',
+          text: `Transcribe the visible chart metadata into ONLY one JSON object with optional keys:
+{
+  "tickValues": ["top-to-bottom printed axis tick values"],
+  "currentPrice": "highlighted current or last price",
+  "instrument": "instrument or symbol if visible",
+  "timeframe": "timeframe if visible",
+  "minPrice": 0,
+  "maxPrice": 0,
+  "precision": 0
+}
+Use strings exactly as printed for tickValues and currentPrice. Include minPrice, maxPrice, and precision only when directly supported by clearly readable printed values. No markdown, commentary, or guessed values.`
+        }
+      ]
+    }
+  ];
+}
+
+async function resizeCalibrationCrop(crop: ModelImageCropInfo, width: number): Promise<ModelImageCropInfo> {
+  if (width >= crop.width) return crop;
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error('Unable to resize the price-scale calibration crop.'));
+    image.src = `data:${crop.mimeType};base64,${crop.base64}`;
+  });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = crop.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Unable to prepare the price-scale calibration crop.');
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/png');
+  return {
+    base64: dataUrl.split(',')[1] || '',
+    width: canvas.width,
+    height: canvas.height,
+    mimeType: 'image/png',
+  };
+}
+
+async function calibratePriceScale(imageInfo?: ModelImageInfo): Promise<PriceScaleCalibration | undefined> {
+  const originalCrop = imageInfo?.priceScale;
+  if (!originalCrop) {
+    console.warn('[Calibration] No price-scale crop was supplied; continuing without calibration.');
+    return undefined;
+  }
+
+  let crop = originalCrop;
+  let messages = buildCalibrationMessages(crop);
+  const calibrationPromptBudget = GROQ_TPM_LIMIT - GROQ_CALIBRATION_MAX_TOKENS - GROQ_TPM_SAFETY_MARGIN;
+  while (estimateGroqPromptTokens(messages, crop) > calibrationPromptBudget && crop.width > 64) {
+    const nextWidth = Math.max(64, Math.floor(crop.width * 0.75));
+    if (nextWidth === crop.width) break;
+    crop = await resizeCalibrationCrop(originalCrop, nextWidth);
+    messages = buildCalibrationMessages(crop);
+    console.log(`[Calibration] Reduced crop width from ${originalCrop.width}px to ${crop.width}px to fit token budget; height remains ${crop.height}px.`);
+  }
+
+  const promptEstimate = estimateGroqPromptTokens(messages, crop);
+  console.log(`[Calibration] Request estimate: ${promptEstimate} prompt tokens + ${GROQ_CALIBRATION_MAX_TOKENS} completion tokens using ${crop.width}x${crop.height}px crop.`);
+  const text = await callGroq(
+    messages,
+    GROQ_MODELS.vision,
+    2,
+    'calibration',
+    crop,
+    GROQ_CALIBRATION_MAX_TOKENS,
+    GROQ_CALIBRATION_MAX_TOKENS
+  );
+  return normalizePriceCalibration(text);
 }
 
 function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
@@ -2218,6 +2438,25 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         await orchestratorHealthCheck();
       }
 
+      let priceCalibration: PriceScaleCalibration | undefined;
+      try {
+        const calibrationDecision = orchestratorDecide(0, lenses.length);
+        console.log(`[Orchestrator] Price-scale calibration: ${calibrationDecision.reason}`);
+        if (calibrationDecision.delayBeforeNextCallMs > 0) {
+          console.log(`[Orchestrator] Waiting ${calibrationDecision.delayBeforeNextCallMs}ms before calibration...`);
+          await new Promise(resolve => setTimeout(resolve, calibrationDecision.delayBeforeNextCallMs));
+        }
+        priceCalibration = await calibratePriceScale(imageInfo);
+        if (priceCalibration) {
+          console.log('[Calibration] Price-scale transcription complete.');
+        } else {
+          console.warn('[Calibration] No usable price-scale values were returned; continuing with relative levels.');
+        }
+      } catch (calibrationError) {
+        console.warn('[Calibration] Price-scale calibration failed (non-critical):', calibrationError);
+      }
+      const priceScaleContext = formatPriceScaleContext(priceCalibration);
+
       // Build per-lens analysis sections
       const allAnnotations: ChartAnnotation[] = [];
       const allAnalysisParts: string[] = [];
@@ -2244,7 +2483,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
         const messages: GroqMessage[] = [
           {
             role: 'system',
-            content: lensConfig.system
+            content: `${lensConfig.system}\n\n${priceScaleContext}`
           },
           {
             role: 'user',
@@ -2257,7 +2496,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               },
               {
                 type: 'text',
-                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Be EXTREMELY specific with price levels. Never say "around" or "approximately" — give exact numbers.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
+                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Quote exact prices only when they are directly readable or derived from the authoritative scale in the system message.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
               }
             ]
           }
@@ -2342,7 +2581,7 @@ ${marketData.recentCandles.length > 0 ? `\nRecent Candle Data (last ${marketData
             const validatorMessages: GroqMessage[] = [
               {
                 role: 'system',
-                content: validationRules + `\n\n**YOUR TASK:**
+                content: validationRules + `\n\n${priceScaleContext}\n\n**YOUR TASK:**
 You are the SECOND AI in a two-stage verification pipeline. The first AI analyzed the chart and produced annotations. You must:
 1. Look at the SAME chart image carefully.
 2. Read the first AI's analysis and annotations.
@@ -2440,7 +2679,7 @@ IMPORTANT:
               const fallbackMessages: GroqMessage[] = [
                 {
                   role: 'system',
-                  content: lensConfig.system
+                  content: `${lensConfig.system}\n\n${priceScaleContext}`
                 },
                 {
                   role: 'user',
@@ -2529,7 +2768,9 @@ Also provide a JSON annotation block with general-purpose educational annotation
           const synthesisMessages: GroqMessage[] = [
             {
               role: 'system',
-              content: `You are an elite institutional Probabilistic Entry Analyst — the final decision-maker at a top-tier bank's proprietary trading desk. Your role is to synthesize multiple independent analytical frameworks into ONE unified, probability-weighted institutional trade plan.
+              content: `${priceScaleContext}
+
+You are an elite institutional Probabilistic Entry Analyst — the final decision-maker at a top-tier bank's proprietary trading desk. Your role is to synthesize multiple independent analytical frameworks into ONE unified, probability-weighted institutional trade plan.
 
 **YOUR IDENTITY & METHODOLOGY:**
 You operate like the best traders from Market Wizards (Schwager):
@@ -2641,7 +2882,7 @@ ${allAnalysisParts.map((part, i) => `--- FRAMEWORK ${i + 1} ---\n${part}`).join(
 
 ---
 
-Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify every zone where 2+ frameworks CONVERGE, assign probability tiers, and produce the full institutional trade plan with exact entries, stops, and targets.`
+Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify every zone where 2+ frameworks CONVERGE, assign probability tiers, and produce the full institutional trade plan with levels derived from the authoritative scale only. Keep quoted levels within the visible range and use relative descriptions rather than invented numbers when the scale is unreadable.`
             }
           ];
 
@@ -2687,9 +2928,12 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
           await new Promise(resolve => setTimeout(resolve, forecastDecision.delayBeforeNextCallMs));
         }
 
-        const forecastMessages = buildForecastMessages(prompt, allAnalysisParts);
+        const forecastMessages = buildForecastMessages(prompt, allAnalysisParts, priceScaleContext);
         const forecastText = await callGroq(forecastMessages, GROQ_MODELS.text, 2, 'forecast');
         forecast = normalizeForecast(forecastText);
+        if (forecast) {
+          forecast = addPriceScaleWarnings(forecast, priceCalibration);
+        }
         if (!forecast) {
           console.warn('[Orchestrator] Forecast stage returned no parseable JSON (non-critical).');
         } else {
