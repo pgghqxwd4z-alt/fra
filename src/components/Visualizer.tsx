@@ -5,12 +5,19 @@ import type { ForecastResult } from '../types';
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
 const MAX_MODEL_IMAGE_EDGE = 1024;
+const PRICE_SCALE_CROP_FRACTION = 0.12;
+const PRICE_SCALE_CROP_MIN_WIDTH = 160;
+const PRICE_SCALE_CROP_MAX_WIDTH = 420;
 
-interface ModelImageInfo {
+interface ModelImageCropInfo {
   base64: string;
   width: number;
   height: number;
   mimeType: string;
+}
+
+interface ModelImageInfo extends ModelImageCropInfo {
+  priceScale: ModelImageCropInfo;
 }
 
 function prepareModelImage(imageDataUrl: string): Promise<ModelImageInfo> {
@@ -20,6 +27,26 @@ function prepareModelImage(imageDataUrl: string): Promise<ModelImageInfo> {
       const width = img.naturalWidth || img.width;
       const height = img.naturalHeight || img.height;
       const mimeType = imageDataUrl.match(/^data:([^;]+);/)?.[1] || 'image/png';
+      const priceScaleWidth = Math.min(
+        width,
+        Math.max(PRICE_SCALE_CROP_MIN_WIDTH, Math.min(PRICE_SCALE_CROP_MAX_WIDTH, Math.round(width * PRICE_SCALE_CROP_FRACTION)))
+      );
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width = Math.max(1, priceScaleWidth);
+      cropCanvas.height = height;
+      const cropContext = cropCanvas.getContext('2d');
+      if (!cropContext) {
+        reject(new Error('Unable to prepare the price-scale crop for vision analysis.'));
+        return;
+      }
+      cropContext.drawImage(img, width - priceScaleWidth, 0, priceScaleWidth, height, 0, 0, priceScaleWidth, height);
+      const cropDataUrl = cropCanvas.toDataURL('image/png');
+      const priceScale: ModelImageCropInfo = {
+        base64: cropDataUrl.split(',')[1] || '',
+        width: cropCanvas.width,
+        height: cropCanvas.height,
+        mimeType: 'image/png',
+      };
 
       if (Math.max(width, height) <= MAX_MODEL_IMAGE_EDGE) {
         resolve({
@@ -27,6 +54,7 @@ function prepareModelImage(imageDataUrl: string): Promise<ModelImageInfo> {
           width,
           height,
           mimeType,
+          priceScale,
         });
         return;
       }
@@ -42,12 +70,14 @@ function prepareModelImage(imageDataUrl: string): Promise<ModelImageInfo> {
       }
 
       context.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      const resizedMimeType = mimeType === 'image/png' ? 'image/png' : 'image/jpeg';
+      const resizedDataUrl = canvas.toDataURL(resizedMimeType, resizedMimeType === 'image/jpeg' ? 0.92 : undefined);
       resolve({
         base64: resizedDataUrl.split(',')[1] || '',
         width: canvas.width,
         height: canvas.height,
-        mimeType: 'image/jpeg',
+        mimeType: resizedMimeType,
+        priceScale,
       });
     };
     img.onerror = () => reject(new Error('Unable to load the chart image for vision analysis.'));
