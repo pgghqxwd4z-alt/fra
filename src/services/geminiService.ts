@@ -1170,11 +1170,21 @@ Visible decimal precision: ${precision}
 Derive every quoted level by interpolating THIS scale only. Quoted levels must remain within the visible minimum and maximum and must match its decimal precision. If a level cannot be read or derived reliably, describe it as approximate or relatively (for example, "recent swing high", "prior support", or "upper liquidity") instead of fabricating an exact number.`;
 }
 
-function extractQuotedNumbers(value: string): number[] {
-  const matches = value.match(/-?\d[\d,]*(?:\.\d+)?/g) || [];
+function extractPlausiblePriceNumbers(value: string, minPrice: number, maxPrice: number): number[] {
+  const matches = [...value.matchAll(/(?<![A-Za-z])-?\d[\d,]*(?:\.\d+)?/g)];
+  const lowerMagnitude = minPrice >= 0 ? minPrice / 10 : undefined;
+  const upperMagnitude = maxPrice >= 0 ? maxPrice * 10 : undefined;
   return matches
-    .map(match => parsePriceNumber(match))
-    .filter((number): number is number => number !== undefined);
+    .filter(match => {
+      const suffix = value.slice((match.index || 0) + match[0].length);
+      return !/^\s*(?:%|R\b|[mhdw]\b|hours?\b|candles?\b|bars?\b|pips?\b|ticks?\b)/i.test(suffix);
+    })
+    .map(match => parsePriceNumber(match[0]))
+    .filter((number): number is number => number !== undefined)
+    .filter(number =>
+      (lowerMagnitude === undefined || number >= lowerMagnitude) &&
+      (upperMagnitude === undefined || number <= upperMagnitude)
+    );
 }
 
 function addPriceScaleWarnings(forecast: ForecastResult, calibration?: PriceScaleCalibration): ForecastResult {
@@ -1194,7 +1204,7 @@ function addPriceScaleWarnings(forecast: ForecastResult, calibration?: PriceScal
   ];
   const warnings = [...forecast.warnings];
   for (const [label, value] of fields) {
-    for (const quotedPrice of extractQuotedNumbers(value)) {
+    for (const quotedPrice of extractPlausiblePriceNumbers(value, minPrice, maxPrice)) {
       if (quotedPrice < minPrice - tolerance || quotedPrice > maxPrice + tolerance) {
         warnings.push(
           `Forecast quoted price ${quotedPrice} in ${label} falls outside the calibrated visible scale (${minPrice}–${maxPrice}); verify it against the chart.`
@@ -1234,7 +1244,7 @@ All keys are required. Do not include markdown, code fences, commentary, or any 
   }));
   const historyPromptBudget = GROQ_TPM_LIMIT - GROQ_MAX_TOKENS_FLOOR - GROQ_TPM_SAFETY_MARGIN;
   const buildUserContent = () =>
-    `USER DIRECTIVE:\n${prompt}\n\n${priceScaleContext}\n\nUse the following lens and synthesis analysis as evidence. Prioritize the most recent structural information and forecast one primary path:\n\n${
+    `USER DIRECTIVE:\n${prompt}\n\nUse the following lens and synthesis analysis as evidence. Prioritize the most recent structural information and forecast one primary path:\n\n${
       evidence.map(item => `${item.label}${item.text}`).join('\n\n')
     }`;
 
@@ -2486,7 +2496,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               },
               {
                 type: 'text',
-                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\n' + priceScaleContext + '\n\nCRITICAL INSTRUCTIONS:\n- Quote exact prices only when they are directly readable or derived from the authoritative scale above.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
+                text: 'Analyze this chart with MAXIMUM DEPTH. Provide exhaustive analysis AND forward-looking AI predictions.\n\nUSER DIRECTIVE: ' + prompt + '\n\nCRITICAL INSTRUCTIONS:\n- Quote exact prices only when they are directly readable or derived from the authoritative scale in the system message.\n- Every claim must reference visible chart structure.\n- Include probability percentages for all predictions.\n- Provide the AI PREDICTION ENGINE section with full probability matrix, next-move forecast, and actionable trade setups.\n- Think like a quant: data-driven, probabilistic, and forward-looking.\n\nRESPONSE FORMAT:\n1. First, provide the full textual analysis following the structure defined in your system prompt, including the AI PREDICTION ENGINE section.\n2. Then, provide a JSON annotation block inside ```json ... ``` fences.\n\n' + lensConfig.annotation + '\n\nAnnotation object format:\n- type: "zone" | "level" | "arrow" | "label" | "bb_entry" | "iez" | "liquidity_void" | "sl_cluster" | "reaccumulation"\n- lens: "' + lens + '"\n- label: descriptive text with price levels where possible\n- yPercent: 0=top, 100=bottom (higher price = lower yPercent)\n- yEndPercent: for zones, bottom edge\n- xPercent: 0=left, 100=right (time axis)\n- xEndPercent: for zones, right edge\n- direction: for arrows, "up" or "down"\n\nEvery data point in your text MUST have a matching annotation. Prediction targets (liquidity magnets, forecast levels) should also be annotated with arrows. No exceptions.'
               }
             ]
           }
@@ -2611,7 +2621,7 @@ IMPORTANT:
                   },
                   {
                     type: 'text',
-                    text: `${priceScaleContext}\n\n**FIRST AI's ANALYSIS:**\n\n${analysisText}\n\n**FIRST AI's ANNOTATIONS:**\n\n${primaryAnnotationsJson}\n\nVerify this analysis against the chart image, external market data, and framework knowledge. Output your Verification Report with data sources, corrected analysis, and corrected JSON annotations.`
+                    text: `**FIRST AI's ANALYSIS:**\n\n${analysisText}\n\n**FIRST AI's ANNOTATIONS:**\n\n${primaryAnnotationsJson}\n\nVerify this analysis against the chart image, external market data, and framework knowledge. Output your Verification Report with data sources, corrected analysis, and corrected JSON annotations.`
                   }
                 ]
               }
@@ -2680,9 +2690,7 @@ IMPORTANT:
                     : 'pure price action (support/resistance, candlestick patterns, trendlines)'
                   }, provide a GENERAL analytical framework and educational analysis that a trader would use on any chart.
 
-                  USER DIRECTIVE: ${prompt}
-
-${priceScaleContext}
+USER DIRECTIVE: ${prompt}
 
 Since the chart image is unavailable, provide:
 1. A comprehensive framework for how to analyze a chart using this lens
@@ -2868,9 +2876,7 @@ Use "iez" type for BUY entries and "bb_entry" type for SELL entries. Minimum 5 s
             },
             {
               role: 'user',
-              content: `${priceScaleContext}
-
-Here are the independent analyses from all active frameworks. Synthesize them into a unified Probabilistic Entry Analysis:
+              content: `Here are the independent analyses from all active frameworks. Synthesize them into a unified Probabilistic Entry Analysis:
 
 ${allAnalysisParts.map((part, i) => `--- FRAMEWORK ${i + 1} ---\n${part}`).join('\n\n')}
 
