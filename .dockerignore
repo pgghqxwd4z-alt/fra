@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env*
+.agents
+TEST_PLAN.md
+node_modules
+dist
+dist-ssr
+.venv
+.ruff_cache
+coverage
+build
+*.log
+Dockerfile*
+README.md
+*.local

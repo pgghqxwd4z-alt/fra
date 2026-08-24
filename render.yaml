@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: quantsage
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: AI_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: groq/compound
+      - key: GROQ_VISION_MODEL
+        value: qwen/qwen3.6-27b
+      - key: APP_USERNAME
+        value: user
+      - key: APP_PASSWORD
+        sync: false
+      - key: TRUST_PROXY
+        value: "1"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "30"
+      - key: RATE_LIMIT_MAX_IDENTITIES
+        value: "4096"

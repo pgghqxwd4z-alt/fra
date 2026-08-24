@@ -54,7 +54,7 @@ class AccessMiddleware:
             for key, value in scope.get("headers", [])
         }
         path = scope.get("path", "")
-        if APP_PASSWORD:
+        if APP_PASSWORD and path != "/health":
             authorization = headers.get("authorization", "")
             scheme, encoded = authorization.split(" ", 1) if " " in authorization else ("", "")
             valid = False
@@ -219,6 +219,11 @@ async def chat(payload: dict[str, Any]) -> Any:
 
 
 CLIENT_DIST = Path.cwd() / "dist" / "client"
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.get("/{full_path:path}")
