@@ -3,10 +3,11 @@ from __future__ import annotations
 import base64
 import binascii
 import hmac
+import ipaddress
 import logging
 import os
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +26,19 @@ logger = logging.getLogger("quantsage")
 MAX_BODY_BYTES = 8 * 1024 * 1024
 RATE_LIMIT_WINDOW = max(1, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
 RATE_LIMIT_QUOTA = max(1, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30")))
+RATE_LIMIT_MAX_IDENTITIES = max(1, int(os.getenv("RATE_LIMIT_MAX_IDENTITIES", "4096")))
+TRUST_PROXY_VALUE = os.getenv("TRUST_PROXY", "").strip().lower()
+try:
+    TRUSTED_PROXY_HOPS = max(0, int(TRUST_PROXY_VALUE))
+except ValueError:
+    TRUSTED_PROXY_HOPS = 1 if TRUST_PROXY_VALUE in {"1", "true", "yes", "on"} else 0
 APP_USERNAME = os.getenv("APP_USERNAME", "user")
 APP_PASSWORD = os.getenv("APP_PASSWORD")
 
 if not APP_PASSWORD:
     logger.warning("APP_PASSWORD is not set; HTTP Basic auth is disabled.")
 
-rate_windows: dict[str, deque[float]] = defaultdict(deque)
+rate_windows: OrderedDict[str, deque[float]] = OrderedDict()
 
 
 class AccessMiddleware:
@@ -42,12 +49,12 @@ class AccessMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
         path = scope.get("path", "")
         if APP_PASSWORD:
-            headers = {
-                key.decode("latin-1").lower(): value.decode("latin-1")
-                for key, value in scope.get("headers", [])
-            }
             authorization = headers.get("authorization", "")
             scheme, encoded = authorization.split(" ", 1) if " " in authorization else ("", "")
             valid = False
@@ -63,17 +70,22 @@ class AccessMiddleware:
                 return
 
         if path.startswith("/api/"):
-            content_length = headers.get("content-length", "") if APP_PASSWORD else next(
-                (value.decode("latin-1") for key, value in scope.get("headers", []) if key.lower() == b"content-length"),
-                "",
-            )
+            content_length = headers.get("content-length", "")
             if content_length and content_length.isdigit() and int(content_length) > MAX_BODY_BYTES:
                 await self._send_json(send, {"error": "Request body too large."}, 413)
                 return
 
             now = time.monotonic()
-            client = scope.get("client")
-            window = rate_windows[client[0] if client else "unknown"]
+            identity = client_identity(scope, headers)
+            sweep_rate_windows(now)
+            window = rate_windows.get(identity)
+            if window is None:
+                if len(rate_windows) >= RATE_LIMIT_MAX_IDENTITIES:
+                    rate_windows.popitem(last=False)
+                window = deque()
+                rate_windows[identity] = window
+            else:
+                rate_windows.move_to_end(identity)
             while window and window[0] <= now - RATE_LIMIT_WINDOW:
                 window.popleft()
             if len(window) >= RATE_LIMIT_QUOTA:
@@ -111,6 +123,34 @@ class AccessMiddleware:
             headers.append((key.encode("latin-1"), value.encode("latin-1")))
         await send({"type": "http.response.start", "status": status_code, "headers": headers})
         await send({"type": "http.response.body", "body": body})
+
+
+def socket_identity(scope: dict[str, Any]) -> str:
+    client = scope.get("client")
+    return client[0] if client else "unknown"
+
+
+def client_identity(scope: dict[str, Any], headers: dict[str, str]) -> str:
+    if TRUSTED_PROXY_HOPS <= 0:
+        return socket_identity(scope)
+    forwarded = headers.get("x-forwarded-for", "")
+    addresses = [candidate.strip() for candidate in forwarded.split(",") if candidate.strip()]
+    if len(addresses) >= TRUSTED_PROXY_HOPS:
+        candidate = addresses[-TRUSTED_PROXY_HOPS]
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            pass
+    return socket_identity(scope)
+
+
+def sweep_rate_windows(now: float) -> None:
+    expired_before = now - RATE_LIMIT_WINDOW
+    for identity, window in list(rate_windows.items()):
+        while window and window[0] <= expired_before:
+            window.popleft()
+        if not window:
+            del rate_windows[identity]
 
 
 app = FastAPI(title="QuantSage")
