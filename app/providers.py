@@ -89,6 +89,8 @@ def normalize_forecast(value: Any) -> dict[str, Any]:
         raw_confidence = float(source.get("confidence"))
     except (TypeError, ValueError):
         raw_confidence = 0
+    if not math.isfinite(raw_confidence):
+        raw_confidence = 0
     confidence = round(max(0, min(100, raw_confidence * 100 if raw_confidence <= 1 else raw_confidence)))
 
     return {

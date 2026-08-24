@@ -62,7 +62,9 @@ class AccessMiddleware:
                 try:
                     decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
                     username, password = decoded.split(":", 1)
-                    valid = username == APP_USERNAME and hmac.compare_digest(password, APP_PASSWORD)
+                    valid = username == APP_USERNAME and hmac.compare_digest(
+                        password.encode("utf-8"), APP_PASSWORD.encode("utf-8")
+                    )
                 except (ValueError, UnicodeDecodeError, binascii.Error):
                     valid = False
             if not valid:
