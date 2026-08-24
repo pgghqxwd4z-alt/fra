@@ -1,0 +1,16 @@
+[project]
+name = "quantsage"
+version = "0.0.0"
+description = "QuantSage institutional trading analysis terminal backend"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "fastapi==0.115.12",
+  "openai==1.78.1",
+  "python-dotenv==1.1.0",
+  "uvicorn[standard]==0.34.2",
+]
+
+[dependency-groups]
+dev = [
+  "ruff==0.11.9",
+]
