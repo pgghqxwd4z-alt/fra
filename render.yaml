@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: quantsage
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    autoDeploy: false
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: AUTH_USER
+        sync: false
+      - key: AUTH_PASSWORD
+        sync: false
