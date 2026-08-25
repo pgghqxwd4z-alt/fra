@@ -1,7 +1,16 @@
 import type { ForecastResult } from '../types';
 
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_USE_PROXY = !GROQ_API_KEY;
+const GROQ_API_URL = GROQ_USE_PROXY ? '/api/groq/chat/completions' : 'https://api.groq.com/openai/v1/chat/completions';
+
+function groqRequestHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (!GROQ_USE_PROXY) {
+    headers.Authorization = `Bearer ${GROQ_API_KEY}`;
+  }
+  return headers;
+}
 const GROQ_MODELS = {
   vision: import.meta.env.VITE_GROQ_VISION_MODEL || 'qwen/qwen3.6-27b',
   text: import.meta.env.VITE_GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
@@ -766,10 +775,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
     await reserveGroqTokens(promptEstimate, GROQ_HEALTHCHECK_MAX_TOKENS, 'healthcheck');
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: groqRequestHeaders(),
       body: JSON.stringify({
         model: GROQ_MODELS.text,
         messages: healthMessages,
@@ -853,10 +859,7 @@ async function callGroq(
       const timeoutId = setTimeout(() => controller.abort(), 90000);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: groqRequestHeaders(),
         body: JSON.stringify({
           model,
           messages,
