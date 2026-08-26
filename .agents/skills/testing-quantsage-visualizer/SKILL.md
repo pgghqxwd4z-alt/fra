@@ -14,7 +14,7 @@ Use this when verifying Deep Visualizer chart upload, AI analysis, fallback copy
 
 ## Standard UI Flow
 
-1. Open the public deployment, e.g. `https://dist-vlkyerww.devinapps.com`.
+1. Open the public deployment URL for the current environment (ask the user or take it from the task/PR if unknown).
 2. Navigate to `Deep Visualizer` from the sidebar.
 3. Upload the standard chart image from `/home/ubuntu/quantsage-test-chart.png` when available.
 4. Confirm the chart renders and `Analyze (1)` becomes enabled.
@@ -23,14 +23,14 @@ Use this when verifying Deep Visualizer chart upload, AI analysis, fallback copy
 
 ## Forced Capacity/Fallback Testing
 
-To test fallback copy deterministically, block the Groq proxy host in the browser before clicking Analyze. One practical approach is to monkey-patch `window.fetch` from the browser console/CDP so requests containing `quantsage-groq-proxy-nvfxfwjk.fly.dev` throw a network error while logging each attempted URL.
+To test fallback copy deterministically, block the Groq proxy host in the browser before clicking Analyze. One practical approach is to monkey-patch `window.fetch` from the browser console/CDP so requests containing the active Groq proxy host (a `quantsage-groq-proxy-*.fly.dev` subdomain) throw a network error while logging each attempted URL.
 
 Expected evidence for a fallback-copy test:
 
 - Final UI renders `Neural Insights` and a `Framework Fallback` panel.
 - New capacity copy appears, e.g. `Groq capacity is busy`, when that is the intended wording.
 - Deprecated fallback copy such as `The live vision model is temporarily unavailable` should appear 0 times when testing its removal.
-- Network evidence should show attempted POSTs to `quantsage-groq-proxy-nvfxfwjk.fly.dev`.
+- Network evidence should show attempted POSTs to the active Groq proxy host (`quantsage-groq-proxy-*.fly.dev`).
 - Unless the task explicitly added recovery providers, verify 0 direct `api.openai.com`, 0 same-origin `/api/groq`, and 0 `openai-fallback` markers.
 
 ## Evidence to Capture
