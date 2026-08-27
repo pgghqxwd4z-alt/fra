@@ -123,3 +123,11 @@ export interface ForecastResult {
 
   timestamp?: number;
 }
+
+export interface MarketVerification {
+  source: 'oanda';
+  instrument: string;
+  environment: string;
+  lastClose: number;
+  asOf: string;
+}

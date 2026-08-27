@@ -5,6 +5,27 @@ import json
 from .schemas import FORECAST_SCHEMA
 
 
+LIVE_MARKET_VERIFICATION = """
+==================================================
+LIVE MARKET DATA VERIFICATION
+==================================================
+
+Use the Oanda feed only to verify price sanity against the chart image.
+Infer the current price implied by the chart image and compare it with the
+live last close. If they differ by more than 0.5%, state that the chart
+appears stale in warnings and cap confidence at 40.
+
+Treat any level you name as suspect if it falls far outside the live H1
+high/low window while you describe it as immediately relevant, and say so in
+warnings.
+
+Never invent BOS, CHoCH, FVGs, order blocks or other structure from the
+numeric feed. Structure must come from the image.
+
+Do not restate the live feed as analysis.
+"""
+
+
 FORECAST_SYSTEM_PROMPT = """
 You are QuantSage Pro, a forward-looking institutional market analysis engine.
 
@@ -230,6 +251,7 @@ def build_forecast_prompt(
     include_schema: bool,
 ) -> str:
     suffix = ""
+    verification = LIVE_MARKET_VERIFICATION if "LIVE MARKET DATA (Oanda," in market_context else ""
     if include_schema:
         suffix = f"""
 Return a JSON object matching this forecast schema exactly. Include every property shown, use the enum values exactly, and do not add properties:
@@ -248,6 +270,8 @@ KNOWLEDGE WARNINGS:
 
 MARKET CONTEXT:
 {market_context or "Not supplied."}
+
+{verification}
 
 USER DIRECTIVE:
 {prompt or "Analyze the supplied chart."}

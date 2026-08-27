@@ -29,3 +29,7 @@ services:
         value: "30"
       - key: RATE_LIMIT_MAX_IDENTITIES
         value: "4096"
+      - key: OANDA_API_TOKEN
+        sync: false
+      - key: OANDA_ENVIRONMENT
+        value: practice

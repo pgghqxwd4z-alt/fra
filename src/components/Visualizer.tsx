@@ -1,11 +1,25 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ForecastResult } from '../types';
+import { ForecastResult, MarketVerification } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
 const nonEmpty = (value: string | undefined | null) => value?.trim() || null;
 const sentence = (value: string | undefined | null) => nonEmpty(value)?.replace(/[.!?]+$/, '') || null;
+
+const verificationTime = (asOf: string) => {
+  const date = new Date(asOf);
+  return Number.isNaN(date.getTime()) ? asOf : `${date.toISOString().slice(11, 16)} UTC`;
+};
+
+const MarketVerificationLine: React.FC<{
+  verification: MarketVerification;
+  fullscreen?: boolean;
+}> = ({ verification, fullscreen = false }) => (
+  <div className={fullscreen ? 'text-xs text-emerald-300/70 font-mono' : 'text-[7px] text-emerald-300/70 font-mono'}>
+    Verified vs Oanda {verification.instrument} · last {verification.lastClose} · {verificationTime(verification.asOf)}
+  </div>
+);
 
 const ForecastDetails: React.FC<{
   forecast: ForecastResult;
@@ -157,6 +171,7 @@ const Visualizer: React.FC = () => {
   const [showOriginal, setShowOriginal] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
+  const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [prompt, setPrompt] = useState(`
@@ -230,6 +245,7 @@ Focus primarily on the future price path from the current market state.
       setImage(event.target?.result as string);
       setResultImage(null);
       setAnalysis(null);
+      setMarketVerification(null);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -307,6 +323,7 @@ Focus primarily on the future price path from the current market state.
       setResultImage(result.image);
       setAnalysis(result.analysis);
       setForecast(result.forecast);
+      setMarketVerification(result.marketVerification || null);
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
@@ -425,6 +442,7 @@ Focus primarily on the future price path from the current market state.
                       setResultImage(null);
                       setAnalysis(null);
                       setForecast(null);
+                      setMarketVerification(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
@@ -487,6 +505,7 @@ Focus primarily on the future price path from the current market state.
                   </div>
                 </div>
 
+                {marketVerification && <MarketVerificationLine verification={marketVerification} />}
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
@@ -623,6 +642,7 @@ Focus primarily on the future price path from the current market state.
                 <div className="flex items-center lg:justify-end gap-3 text-xs font-mono tracking-widest text-white/30">{forecast.confidence}% CONFIDENCE RATING</div>
               </div>
             </div>
+            {marketVerification && <MarketVerificationLine verification={marketVerification} fullscreen />}
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>

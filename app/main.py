@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.status import HTTP_401_UNAUTHORIZED
 from starlette.types import ASGIApp
 
+from .market import fetch_market_data
 from .providers import AIProvider
 
 load_dotenv()
@@ -197,8 +198,15 @@ async def annotate(payload: dict[str, Any]) -> Any:
         prompt = payload.get("prompt", "")
         lenses = payload.get("lenses", ["smc"])
         market_context = payload.get("marketContext", "")
+        market_data = await fetch_market_data(payload.get("instrument"), prompt)
+        if market_data:
+            market_context = (
+                f"{market_context.rstrip()}\n\n{market_data.context}"
+                if isinstance(market_context, str) and market_context.strip()
+                else market_data.context
+            )
         knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
-        return await provider.annotate(
+        result = await provider.annotate(
             payload.get("base64Image", ""),
             prompt,
             lenses,
@@ -206,6 +214,9 @@ async def annotate(payload: dict[str, Any]) -> Any:
             "\n".join(lens_instructions(lenses)),
             knowledge,
         )
+        if market_data:
+            result["marketVerification"] = market_data.verification
+        return result
     except Exception as error:
         logger.exception("Annotate error:")
         return error_response(error)
