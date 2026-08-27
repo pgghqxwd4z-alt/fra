@@ -73,7 +73,10 @@ RESEARCH_SCHEMA = {
                     "title": {"type": "string"},
                     "summary": {"type": "string"},
                     "publishedAt": {"type": "string"},
-                    "url": {"type": "string"},
+                    "url": {
+                        "type": "string",
+                        "description": "Exact retrieved url, or an empty string when unknown.",
+                    },
                     "impact": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
                 },
                 "required": ["title", "summary", "publishedAt", "url", "impact"],
