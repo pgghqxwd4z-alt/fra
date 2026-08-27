@@ -48,6 +48,21 @@ def safe_source_url(raw: str | None, domains: list[str] | None = None) -> str | 
     return None
 
 
+def _normalized_hostname(raw: str) -> str | None:
+    try:
+        host = urlparse(raw).hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    host = host.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _hosts_match(left: str, right: str) -> bool:
+    return left == right or left.endswith(f".{right}") or right.endswith(f".{left}")
+
+
 def route_knowledge(lenses: list[str] | None = None) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
@@ -332,6 +347,17 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
     @staticmethod
     def map_research_result(parsed: Any, grounding: list[dict[str, Any]]) -> dict[str, Any]:
         source = parsed if isinstance(parsed, dict) else {}
+        grounding_hosts = {
+            host
+            for item in grounding
+            if isinstance(item, dict)
+            for web in [item.get("web")]
+            if isinstance(web, dict)
+            for uri in [web.get("uri")]
+            if isinstance(uri, str)
+            for host in [_normalized_hostname(uri)]
+            if host
+        }
         headlines = []
         for item in source.get("headlines", [])[:6] if isinstance(source.get("headlines"), list) else []:
             if not isinstance(item, dict):
@@ -348,8 +374,16 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
                 parsed_url = urlparse(raw_url)
             except ValueError:
                 parsed_url = None
-            if parsed_url and parsed_url.scheme.lower() in {"http", "https"} and parsed_url.netloc:
-                mapped["url"] = parsed_url.geturl()
+            if (
+                parsed_url
+                and parsed_url.scheme.lower() in {"http", "https"}
+                and parsed_url.netloc
+            ):
+                headline_host = _normalized_hostname(raw_url)
+                if headline_host and any(
+                    _hosts_match(headline_host, source_host) for source_host in grounding_hosts
+                ):
+                    mapped["url"] = parsed_url.geturl()
             headlines.append(mapped)
 
         events = []
