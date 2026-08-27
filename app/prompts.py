@@ -5,6 +5,48 @@ import json
 from .schemas import FORECAST_SCHEMA
 
 
+def build_research_prompt(label: str) -> str:
+    return f"""You are the QuantSage Market Research Agent.
+Gather only current, decision-relevant external context for {label}.
+Do NOT predict the market. Do NOT give trading advice. Do NOT analyze chart structure.
+
+Return:
+- Headlines from the last 48 hours that could move {label}, newest first, with the publication timestamp in UTC.
+- Scheduled economic events or releases in the next 24 hours that could move {label}, with times in UTC.
+- Whether that material, taken together, leans bullish, bearish, mixed, or gives no signal.
+
+Rules:
+- Prefer primary sources: exchanges, central banks, official statistical releases, major financial newswires.
+- Omit anything you cannot attribute to a real published source; never invent a headline, a URL or a timestamp.
+- Omit anything older than 48 hours.
+- Mark impact HIGH only for material that plausibly moves price by itself.
+- If nothing qualifies, return empty lists and biasSignal NONE.
+
+Return JSON only using the supplied schema.
+"""
+
+
+EXTERNAL_RESEARCH_VERIFICATION = """
+==================================================
+EXTERNAL RESEARCH VERIFICATION
+==================================================
+
+The research block is context, not evidence. Structure, levels and bias must
+still be derived from the chart image.
+
+If a HIGH impact scheduled event falls inside the horizon of your forecast,
+name it in nextEvent, say so in warnings, and cap confidence at 50.
+
+If the research bias signal is SUPPORTS_BULLISH while your image-derived bias
+is BEARISH, or SUPPORTS_BEARISH while your bias is BULLISH, describe the
+forecast as contested in warnings and cap confidence at 55.
+
+Never treat a headline as a level, a break of structure or a liquidity target.
+Do not quote or cite URLs in any forecast field.
+When both a stale-chart cap and a research cap apply, use the lower cap.
+"""
+
+
 LIVE_MARKET_VERIFICATION = """
 ==================================================
 LIVE MARKET DATA VERIFICATION
@@ -251,7 +293,11 @@ def build_forecast_prompt(
     include_schema: bool,
 ) -> str:
     suffix = ""
-    verification = LIVE_MARKET_VERIFICATION if "LIVE MARKET DATA (Oanda," in market_context else ""
+    verification = ""
+    if "LIVE MARKET DATA (Oanda," in market_context:
+        verification += LIVE_MARKET_VERIFICATION
+    if "EXTERNAL RESEARCH (web," in market_context:
+        verification += EXTERNAL_RESEARCH_VERIFICATION
     if include_schema:
         suffix = f"""
 Return a JSON object matching this forecast schema exactly. Include every property shown, use the enum values exactly, and do not add properties:

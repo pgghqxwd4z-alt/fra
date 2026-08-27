@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import asyncio
 import hmac
 import ipaddress
 import logging
@@ -17,8 +18,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.status import HTTP_401_UNAUTHORIZED
 from starlette.types import ASGIApp
 
-from .market import fetch_market_data
+from .market import fetch_market_data, resolve_instrument
 from .providers import AIProvider
+from .research import fetch_market_research
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -198,13 +200,32 @@ async def annotate(payload: dict[str, Any]) -> Any:
         prompt = payload.get("prompt", "")
         lenses = payload.get("lenses", ["smc"])
         market_context = payload.get("marketContext", "")
-        market_data = await fetch_market_data(payload.get("instrument"), prompt)
-        if market_data:
-            market_context = (
-                f"{market_context.rstrip()}\n\n{market_data.context}"
-                if isinstance(market_context, str) and market_context.strip()
-                else market_data.context
-            )
+        instrument = resolve_instrument(payload.get("instrument"), prompt)
+        market_data_result, research_result = await asyncio.gather(
+            fetch_market_data(instrument),
+            fetch_market_research(provider, instrument),
+            return_exceptions=True,
+        )
+        market_data = (
+            market_data_result
+            if not isinstance(market_data_result, Exception)
+            else None
+        )
+        if isinstance(market_data_result, Exception):
+            logger.warning("Oanda market data failed unexpectedly: %s", market_data_result)
+        market_research = (
+            research_result
+            if not isinstance(research_result, Exception)
+            else None
+        )
+        if isinstance(research_result, Exception):
+            logger.warning("External market research failed unexpectedly: %s", research_result)
+        context_parts = [
+            market_context if isinstance(market_context, str) and market_context.strip() else "",
+            market_data.context if market_data else "",
+            market_research.context if market_research else "",
+        ]
+        market_context = "\n\n".join(part for part in context_parts if part)
         knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
         result = await provider.annotate(
             payload.get("base64Image", ""),
@@ -216,6 +237,8 @@ async def annotate(payload: dict[str, Any]) -> Any:
         )
         if market_data:
             result["marketVerification"] = market_data.verification
+        if market_research:
+            result["marketResearch"] = market_research.metadata
         return result
     except Exception as error:
         logger.exception("Annotate error:")

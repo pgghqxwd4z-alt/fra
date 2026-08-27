@@ -62,6 +62,47 @@ KNOWLEDGE_SCHEMA = {
     "additionalProperties": False,
 }
 
+RESEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headlines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "publishedAt": {"type": "string"},
+                    "url": {"type": "string"},
+                    "impact": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                },
+                "required": ["title", "summary", "publishedAt", "url", "impact"],
+                "additionalProperties": False,
+            },
+        },
+        "upcomingEvents": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "whenUtc": {"type": "string"},
+                    "importance": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                },
+                "required": ["name", "whenUtc", "importance"],
+                "additionalProperties": False,
+            },
+        },
+        "biasSignal": {
+            "type": "string",
+            "enum": ["SUPPORTS_BULLISH", "SUPPORTS_BEARISH", "MIXED", "NONE"],
+        },
+        "notes": {"type": "string"},
+    },
+    "required": ["headlines", "upcomingEvents", "biasSignal", "notes"],
+    "additionalProperties": False,
+}
+
 FORECAST_SCHEMA = {
     "type": "object",
     "properties": {

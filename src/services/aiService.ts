@@ -1,6 +1,7 @@
 import {
   ForecastResult,
   GroundingChunk,
+  MarketResearch,
   MarketVerification
 } from "../types";
 
@@ -15,6 +16,7 @@ interface AnnotateResponse {
   analysis: string;
   forecast: ForecastResult | null;
   marketVerification?: MarketVerification;
+  marketResearch?: MarketResearch;
 }
 
 interface HistoryEntry {
@@ -60,7 +62,8 @@ export const aiService = {
         image: null,
         analysis: data.analysis,
         forecast: data.forecast,
-        marketVerification: data.marketVerification
+        marketVerification: data.marketVerification,
+        marketResearch: data.marketResearch
       };
     } catch (error) {
       console.error("Forecast Error:", error);

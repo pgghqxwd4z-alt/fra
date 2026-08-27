@@ -56,6 +56,10 @@ supported instruments. `OANDA_ENVIRONMENT` defaults to `practice`; set it to
 `live` only when the corresponding Oanda token is intended for the live
 environment. When the token is absent, the instrument is unknown, or Oanda is
 unavailable, forecasting continues with the previous screenshot-only behavior.
+`MARKET_RESEARCH_ENABLED` defaults to `1` and controls external headline and
+event research. It costs one extra provider search call per forecast, adds
+latency, degrades silently to screenshot-only forecasting when unavailable,
+and requires a resolved instrument.
 Provider keys are server-side only.
 
 ## Render deployment
@@ -78,8 +82,8 @@ To deploy:
    if `AI_PROVIDER=groq` is selected.
 3. Keep `AI_PROVIDER=openai` for the default OpenAI deployment, or select
    `groq` and provide its key. The Blueprint supplies defaults for the model,
-   username, proxy trust, rate limits, and Oanda practice mode. Enter
-   `OANDA_API_TOKEN` to enable live market verification.
+   username, proxy trust, rate limits, Oanda practice mode, and market
+   research. Enter `OANDA_API_TOKEN` to enable live market verification.
 
 Render injects `PORT` at runtime; do not hardcode the public service port.
 Provider keys and authentication secrets are read only from Render environment

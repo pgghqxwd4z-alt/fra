@@ -155,12 +155,11 @@ async def _request_market_data(
     return _build_context(instrument, as_of, candles["M15"], candles["H1"])
 
 
-async def fetch_market_data(explicit_instrument: Any, prompt: Any) -> MarketData | None:
+async def fetch_market_data(instrument: str | None) -> MarketData | None:
     token = os.getenv("OANDA_API_TOKEN", "").strip()
     if not token:
         logger.warning("OANDA_API_TOKEN is not set; continuing without live market data.")
         return None
-    instrument = resolve_instrument(explicit_instrument, prompt)
     if not instrument:
         logger.warning("No supported Oanda instrument was found; continuing without live market data.")
         return None

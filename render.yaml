@@ -33,3 +33,5 @@ services:
         sync: false
       - key: OANDA_ENVIRONMENT
         value: practice
+      - key: MARKET_RESEARCH_ENABLED
+        value: "1"

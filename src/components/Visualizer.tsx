@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ForecastResult, MarketVerification } from '../types';
+import { ForecastResult, MarketResearch, MarketVerification } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -18,6 +18,34 @@ const MarketVerificationLine: React.FC<{
 }> = ({ verification, fullscreen = false }) => (
   <div className={fullscreen ? 'text-xs text-emerald-300/70 font-mono' : 'text-[7px] text-emerald-300/70 font-mono'}>
     Verified vs Oanda {verification.instrument} · last {verification.lastClose} · {verificationTime(verification.asOf)}
+  </div>
+);
+
+const MarketResearchSummary: React.FC<{
+  research: MarketResearch;
+  fullscreen?: boolean;
+}> = ({ research, fullscreen = false }) => {
+  const nextEvent = research.upcomingEvents[0];
+  return (
+    <div className={fullscreen ? 'text-xs text-sky-300/70 font-mono' : 'text-[7px] text-sky-300/70 font-mono'}>
+      Research: {research.headlines.length} headlines · {research.biasSignal}
+      {nextEvent && ` · next ${nextEvent.name} ${nextEvent.whenUtc}`}
+    </div>
+  );
+};
+
+const MarketResearchHeadlines: React.FC<{ research: MarketResearch }> = ({ research }) => (
+  <div className="mt-2 space-y-1 text-xs text-sky-200/80 font-mono">
+    {research.headlines.slice(0, 3).map((headline, index) => {
+      const text = `${headline.impact} · ${headline.publishedAt} · ${headline.title}`;
+      return headline.url ? (
+        <a key={`${headline.url}-${index}`} href={headline.url} target="_blank" rel="noreferrer noopener" className="block hover:text-sky-200 hover:underline">
+          {text}
+        </a>
+      ) : (
+        <div key={`${headline.title}-${index}`}>{text}</div>
+      );
+    })}
   </div>
 );
 
@@ -172,6 +200,7 @@ const Visualizer: React.FC = () => {
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
   const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
+  const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [prompt, setPrompt] = useState(`
@@ -246,6 +275,7 @@ Focus primarily on the future price path from the current market state.
       setResultImage(null);
       setAnalysis(null);
       setMarketVerification(null);
+      setMarketResearch(null);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -324,6 +354,7 @@ Focus primarily on the future price path from the current market state.
       setAnalysis(result.analysis);
       setForecast(result.forecast);
       setMarketVerification(result.marketVerification || null);
+      setMarketResearch(result.marketResearch || null);
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
@@ -443,6 +474,7 @@ Focus primarily on the future price path from the current market state.
                       setAnalysis(null);
                       setForecast(null);
                       setMarketVerification(null);
+                      setMarketResearch(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
@@ -506,6 +538,7 @@ Focus primarily on the future price path from the current market state.
                 </div>
 
                 {marketVerification && <MarketVerificationLine verification={marketVerification} />}
+                {marketResearch && <MarketResearchSummary research={marketResearch} />}
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
@@ -643,6 +676,12 @@ Focus primarily on the future price path from the current market state.
               </div>
             </div>
             {marketVerification && <MarketVerificationLine verification={marketVerification} fullscreen />}
+            {marketResearch && (
+              <>
+                <MarketResearchSummary research={marketResearch} fullscreen />
+                <MarketResearchHeadlines research={marketResearch} />
+              </>
+            )}
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>

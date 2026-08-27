@@ -8,8 +8,13 @@ from urllib.parse import urlparse
 
 from openai import AsyncOpenAI
 
-from .prompts import FORECAST_SYSTEM_PROMPT, build_forecast_prompt, build_retrieval_prompt
-from .schemas import FORECAST_SCHEMA, KNOWLEDGE_SCHEMA, source_for
+from .prompts import (
+    FORECAST_SYSTEM_PROMPT,
+    build_forecast_prompt,
+    build_research_prompt,
+    build_retrieval_prompt,
+)
+from .schemas import FORECAST_SCHEMA, KNOWLEDGE_SCHEMA, RESEARCH_SCHEMA, source_for
 
 
 PRIVATE_CITATION_RE = re.compile(
@@ -323,6 +328,100 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             else "NO EXTERNAL KNOWLEDGE RETRIEVED."
         )
         return {"items": items, "context": context, "warnings": parsed.get("warnings", [])}
+
+    @staticmethod
+    def map_research_result(parsed: Any, grounding: list[dict[str, Any]]) -> dict[str, Any]:
+        source = parsed if isinstance(parsed, dict) else {}
+        headlines = []
+        for item in source.get("headlines", [])[:6] if isinstance(source.get("headlines"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            impact = _string(item.get("impact"))
+            mapped = {
+                "title": _string(item.get("title")),
+                "summary": _string(item.get("summary")),
+                "publishedAt": _string(item.get("publishedAt")),
+                "impact": impact if impact in {"HIGH", "MEDIUM", "LOW"} else "LOW",
+            }
+            raw_url = _string(item.get("url"))
+            try:
+                parsed_url = urlparse(raw_url)
+            except ValueError:
+                parsed_url = None
+            if parsed_url and parsed_url.scheme.lower() in {"http", "https"} and parsed_url.netloc:
+                mapped["url"] = parsed_url.geturl()
+            headlines.append(mapped)
+
+        events = []
+        for item in source.get("upcomingEvents", [])[:4] if isinstance(source.get("upcomingEvents"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            importance = _string(item.get("importance"))
+            events.append(
+                {
+                    "name": _string(item.get("name")),
+                    "whenUtc": _string(item.get("whenUtc")),
+                    "importance": importance if importance in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM",
+                }
+            )
+
+        sources = []
+        for item in grounding[:6]:
+            web = item.get("web") if isinstance(item, dict) else None
+            if not isinstance(web, dict):
+                continue
+            uri = web.get("uri")
+            if isinstance(uri, str):
+                sources.append({"uri": uri, "title": _string(web.get("title")) or uri})
+        bias_signal = _string(source.get("biasSignal"))
+        return {
+            "headlines": headlines,
+            "upcomingEvents": events,
+            "biasSignal": bias_signal if bias_signal in {"SUPPORTS_BULLISH", "SUPPORTS_BEARISH", "MIXED", "NONE"} else "NONE",
+            "notes": _string(source.get("notes")),
+            "sources": sources,
+        }
+
+    async def research_market(self, label: str) -> dict[str, Any]:
+        research_prompt = build_research_prompt(label)
+        client = self.require_client()
+        if self.name == "groq":
+            result = await client.chat.completions.create(
+                model=self.groq_model,
+                messages=[{"role": "user", "content": research_prompt}],
+                response_format={"type": "json_object"},
+            )
+            text = result.choices[0].message.content
+            if not text:
+                raise RuntimeError("No response text from model")
+            return self.map_research_result(parse_json_object(text), map_groq_grounding(result))
+
+        search_result = await client.responses.create(
+            model=self.openai_model,
+            tools=[{"type": "web_search"}],
+            input=research_prompt,
+        )
+        source_material = search_result.output_text or "No web search material was returned."
+        result = await client.responses.create(
+            model=self.openai_model,
+            input=f"""{research_prompt}
+
+WEB SEARCH MATERIAL:
+{source_material}
+
+Convert the material above into the requested JSON schema. Return JSON only.""",
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "market_research",
+                    "strict": True,
+                    "schema": RESEARCH_SCHEMA,
+                }
+            },
+        )
+        if not result.output_text:
+            raise RuntimeError("No response text from model")
+        return self.map_research_result(json.loads(result.output_text), map_openai_grounding(search_result))
 
     async def annotate(
         self,

@@ -131,3 +131,28 @@ export interface MarketVerification {
   lastClose: number;
   asOf: string;
 }
+
+export interface MarketResearchHeadline {
+  title: string;
+  url?: string;
+  publishedAt: string;
+  impact: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface MarketResearchEvent {
+  name: string;
+  whenUtc: string;
+  importance: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface MarketResearch {
+  asOf: string;
+  label: string;
+  biasSignal: 'SUPPORTS_BULLISH' | 'SUPPORTS_BEARISH' | 'MIXED' | 'NONE';
+  headlines: MarketResearchHeadline[];
+  upcomingEvents: MarketResearchEvent[];
+  sources: {
+    uri: string;
+    title: string;
+  }[];
+}
