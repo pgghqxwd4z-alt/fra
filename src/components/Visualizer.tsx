@@ -12,6 +12,14 @@ const verificationTime = (asOf: string) => {
   return Number.isNaN(date.getTime()) ? asOf : `${date.toISOString().slice(11, 16)} UTC`;
 };
 
+const sourceHost = (uri: string) => {
+  try {
+    return new URL(uri).hostname.replace(/^www\./i, '');
+  } catch {
+    return uri;
+  }
+};
+
 const MarketVerificationLine: React.FC<{
   verification: MarketVerification;
   fullscreen?: boolean;
@@ -48,6 +56,20 @@ const MarketResearchHeadlines: React.FC<{ research: MarketResearch }> = ({ resea
     })}
   </div>
 );
+
+const MarketResearchSources: React.FC<{ research: MarketResearch }> = ({ research }) => {
+  if (!research.sources.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-sky-200/80 font-mono">
+      <span>Sources:</span>
+      {research.sources.slice(0, 4).map((source) => (
+        <a key={source.uri} href={source.uri} target="_blank" rel="noreferrer noopener" className="hover:text-sky-200 hover:underline">
+          {sourceHost(source.uri)}
+        </a>
+      ))}
+    </div>
+  );
+};
 
 const ForecastDetails: React.FC<{
   forecast: ForecastResult;
@@ -680,6 +702,7 @@ Focus primarily on the future price path from the current market state.
               <>
                 <MarketResearchSummary research={marketResearch} fullscreen />
                 <MarketResearchHeadlines research={marketResearch} />
+                <MarketResearchSources research={marketResearch} />
               </>
             )}
             <ForecastDetails forecast={forecast} variant="fullscreen" />

@@ -63,6 +63,22 @@ def _hosts_match(left: str, right: str) -> bool:
     return left == right or left.endswith(f".{right}") or right.endswith(f".{left}")
 
 
+def _normalized_uri(raw: str) -> str:
+    value = raw.strip()
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return value
+    if not parsed.scheme or not parsed.netloc:
+        return value
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        fragment="",
+    ).geturl()
+    return normalized.rstrip("/")
+
+
 def route_knowledge(lenses: list[str] | None = None) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
@@ -400,13 +416,20 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             )
 
         sources = []
-        for item in grounding[:6]:
+        seen_source_uris = set()
+        for item in grounding:
             web = item.get("web") if isinstance(item, dict) else None
             if not isinstance(web, dict):
                 continue
             uri = web.get("uri")
             if isinstance(uri, str):
+                normalized_uri = _normalized_uri(uri)
+                if normalized_uri in seen_source_uris:
+                    continue
+                seen_source_uris.add(normalized_uri)
                 sources.append({"uri": uri, "title": _string(web.get("title")) or uri})
+                if len(sources) == 6:
+                    break
         bias_signal = _string(source.get("biasSignal"))
         return {
             "headlines": headlines,
