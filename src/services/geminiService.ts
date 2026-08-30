@@ -887,9 +887,7 @@ export function drawAnnotationsOnCanvas(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    if (!imageDataUrl.startsWith('data:')) {
-      img.crossOrigin = 'anonymous';
-    }
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = img.width;
