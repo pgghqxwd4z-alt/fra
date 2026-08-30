@@ -1,4 +1,5 @@
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
+const PROXY_ACCESS_KEY = import.meta.env.VITE_PROXY_ACCESS_KEY?.trim() || '';
 const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '/api/groq/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
@@ -7,9 +8,13 @@ const VERIFICATION_MAX_TOKENS = 1024;
 const TEXT_STAGE_MAX_TOKENS = 768;
 
 function getGroqHeaders(): Record<string, string> {
-  return {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
+  if (PROXY_ACCESS_KEY) {
+    headers['X-QuantSage-Proxy-Key'] = PROXY_ACCESS_KEY;
+  }
+  return headers;
 }
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.

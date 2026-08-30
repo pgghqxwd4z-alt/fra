@@ -1,4 +1,5 @@
 import os
+import hmac
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -16,6 +17,7 @@ OPENAI_VISION_FALLBACK_MODEL = "gpt-4o"
 OPENAI_TEXT_FALLBACK_MODEL = "gpt-4o-mini"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+PROXY_ACCESS_KEY = os.environ.get("PROXY_ACCESS_KEY", "").strip()
 AI_PRIMARY_PROVIDER = os.environ.get("AI_PRIMARY_PROVIDER", "").strip().lower() or (
     "openai" if OPENAI_API_KEY else "groq"
 )
@@ -44,6 +46,7 @@ async def health() -> dict[str, bool]:
         "openai_configured": bool(OPENAI_API_KEY),
         "openai_fallback_configured": bool(OPENAI_API_KEY),
         "openai_primary": AI_PRIMARY_PROVIDER == "openai",
+        "access_key_required": bool(PROXY_ACCESS_KEY),
     }
 
 
@@ -82,6 +85,12 @@ def map_openai_payload(payload: dict) -> dict:
 
 @app.post("/api/groq/chat/completions")
 async def groq_chat_completions(request: Request) -> JSONResponse:
+    if PROXY_ACCESS_KEY and not hmac.compare_digest(
+        request.headers.get("X-QuantSage-Proxy-Key", ""),
+        PROXY_ACCESS_KEY,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or missing proxy access key")
+
     if AI_PRIMARY_PROVIDER == "openai":
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=500, detail="Server missing OPENAI_API_KEY")
