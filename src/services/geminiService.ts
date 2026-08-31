@@ -1,11 +1,19 @@
 const GROQ_PROXY_URL = import.meta.env.VITE_GROQ_PROXY_URL?.trim() || '';
 const PROXY_ACCESS_KEY = import.meta.env.VITE_PROXY_ACCESS_KEY?.trim() || '';
+const CRYPTOCOMPARE_API_KEY = import.meta.env.VITE_CRYPTOCOMPARE_API_KEY?.trim() || '';
 const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL.replace(/\/+$/, '')}/api/groq/chat/completions` : '/api/groq/chat/completions';
 const BINANCE_REST_URL = 'https://data-api.binance.vision/api/v3';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 const PRIMARY_VISION_MAX_TOKENS = 1536;
 const VERIFICATION_MAX_TOKENS = 1024;
 const TEXT_STAGE_MAX_TOKENS = 768;
+const CRYPTO_BASE_ASSETS = new Set([
+  'BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'DOT', 'XRP', 'DOGE', 'AVAX',
+  'MATIC', 'LINK', 'UNI', 'ATOM', 'LTC', 'FTM', 'NEAR', 'APE', 'OP',
+  'ARB', 'INJ', 'TIA', 'SEI', 'SUI', 'JUP', 'WIF', 'PEPE', 'BONK',
+  'FLOKI', 'SHIB',
+]);
+const QUOTE_ASSETS = new Set(['USDT', 'USD', 'USDC', 'BUSD', 'BTC', 'ETH']);
 
 function getGroqHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -86,29 +94,41 @@ interface MarketDataContext {
 }
 
 async function extractSymbolFromAnalysis(analysisText: string): Promise<string> {
-  // Try to extract the trading symbol from the analysis text
-  const patterns = [
-    /([A-Z]{2,10})\s*\/\s*([A-Z]{2,10})/i, // BTC/USDT, EUR/USD
-    /([A-Z]{2,10})(USDT|USD|BTC|ETH|BUSD)/i, // BTCUSDT, ETHBTC
-    /\b(BTC|ETH|SOL|BNB|ADA|DOT|XRP|DOGE|AVAX|MATIC|LINK|UNI|ATOM|LTC|FTM|NEAR|APE|OP|ARB|INJ|TIA|SEI|SUI|JUP|WIF|PEPE|BONK|FLOKI|SHIB|GOLD|XAUUSD|EURUSD|GBPUSD|USDJPY|SPX|SPY|QQQ|NQ|ES|YM|GC|CL|SI|NG)\b/i,
-  ];
-  for (const pat of patterns) {
-    const match = analysisText.match(pat);
-    if (match) {
-      if (match[2]) return (match[1] + match[2]).toUpperCase();
-      return match[1].toUpperCase();
+  for (const pairMatch of analysisText.matchAll(/\b([A-Z]{2,10})\s*\/\s*([A-Z]{2,10})\b/g)) {
+    if (CRYPTO_BASE_ASSETS.has(pairMatch[1]) && QUOTE_ASSETS.has(pairMatch[2])) {
+      return pairMatch[1] + pairMatch[2];
     }
   }
+
+  for (const concatenatedMatch of analysisText.matchAll(/\b([A-Z]{2,10})(USDT|USDC|BUSD|USD|BTC|ETH)\b/g)) {
+    if (CRYPTO_BASE_ASSETS.has(concatenatedMatch[1])) {
+      return concatenatedMatch[1] + concatenatedMatch[2];
+    }
+  }
+
+  const bareBase = analysisText.match(/\b[A-Z]{2,10}\b/g)?.find(asset => CRYPTO_BASE_ASSETS.has(asset));
+  if (bareBase) {
+    return bareBase;
+  }
+
   return '';
 }
 
 async function fetchBinanceData(symbol: string): Promise<MarketDataContext | null> {
   try {
     // Normalize symbol for Binance
-    let binanceSymbol = symbol.replace('/', '').toUpperCase();
-    if (!binanceSymbol.endsWith('USDT') && !binanceSymbol.endsWith('USD') && !binanceSymbol.endsWith('BTC')) {
+    let binanceSymbol = symbol.replace(/\//g, '').toUpperCase();
+    const quoteAssetsByLength = [...QUOTE_ASSETS].sort((a, b) => b.length - a.length);
+    const isKnownPair = quoteAssetsByLength.some(quote => (
+      binanceSymbol.endsWith(quote)
+      && CRYPTO_BASE_ASSETS.has(binanceSymbol.slice(0, -quote.length))
+    ));
+    if (!isKnownPair) {
       binanceSymbol = binanceSymbol + 'USDT';
     }
+    const quote = quoteAssetsByLength.find(candidate => binanceSymbol.endsWith(candidate));
+    const base = quote ? binanceSymbol.slice(0, -quote.length) : '';
+    if (!base || !CRYPTO_BASE_ASSETS.has(base)) return null;
 
     // Fetch ticker + recent klines in parallel
     const [tickerRes, klinesRes] = await Promise.all([
@@ -319,11 +339,11 @@ async function fetchWebSearchResults(query: string): Promise<WebSearchResult[]> 
       }
     }
 
-    // Also try CryptoCompare news API for crypto-specific queries (free, no key needed)
+    // Also try CryptoCompare news API for crypto-specific queries when configured
     const cryptoKeywords = /\b(BTC|ETH|SOL|BNB|XRP|DOGE|ADA|DOT|AVAX|MATIC|LINK|bitcoin|ethereum|solana|crypto|defi|altcoin)\b/i;
-    if (cryptoKeywords.test(query)) {
+    if (cryptoKeywords.test(query) && CRYPTOCOMPARE_API_KEY) {
       try {
-        const newsRes = await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN&sortOrder=popular');
+        const newsRes = await fetch(`https://min-api.cryptocompare.com/data/v2/news/?lang=EN&sortOrder=popular&api_key=${encodeURIComponent(CRYPTOCOMPARE_API_KEY)}`);
         if (newsRes.ok) {
           const newsData = await newsRes.json();
           if (newsData.Data && Array.isArray(newsData.Data)) {
