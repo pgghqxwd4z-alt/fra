@@ -14,6 +14,8 @@ cp .env.example .env.local
 ```env
 VITE_GROQ_PROXY_URL=https://your-proxy.example.com
 VITE_PROXY_ACCESS_KEY=your_proxy_access_key
+# Optional shared password gate for public deployments
+VITE_APP_PASSWORD=
 ```
 
 Never commit `.env.local` or real API keys.
@@ -26,10 +28,12 @@ dashboard or API. Build the frontend with these Vite variables:
 ```env
 VITE_GROQ_PROXY_URL=https://your-proxy.example.com
 VITE_PROXY_ACCESS_KEY=your_proxy_access_key
+VITE_APP_PASSWORD=
 ```
 
 `VITE_GROQ_PROXY_URL` and `VITE_PROXY_ACCESS_KEY` are build-time frontend
-variables.
+variables. `VITE_APP_PASSWORD` is also a build-time variable: it is embedded
+in the frontend bundle, so it deters casual access but is not real security.
 
 Currently, two official plugins are available:
 
