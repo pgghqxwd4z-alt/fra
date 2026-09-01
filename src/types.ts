@@ -125,9 +125,11 @@ export interface ForecastResult {
 }
 
 export interface MarketVerification {
-  source: 'oanda';
+  source: 'oanda' | 'twelvedata' | 'yahoo';
   instrument: string;
-  environment: string;
+  environment?: string;
+  symbol?: string;
+  proxy?: boolean;
   lastClose: number;
   asOf: string;
 }

@@ -20,12 +20,18 @@ const sourceHost = (uri: string) => {
   }
 };
 
+const marketSourceLabels = {
+  oanda: 'Oanda',
+  twelvedata: 'Twelve Data',
+  yahoo: 'Yahoo',
+} as const;
+
 const MarketVerificationLine: React.FC<{
   verification: MarketVerification;
   fullscreen?: boolean;
 }> = ({ verification, fullscreen = false }) => (
   <div className={fullscreen ? 'text-xs text-emerald-300/70 font-mono' : 'text-[7px] text-emerald-300/70 font-mono'}>
-    Verified vs Oanda {verification.instrument} · last {verification.lastClose} · {verificationTime(verification.asOf)}
+    Verified vs {marketSourceLabels[verification.source]} {verification.instrument}{verification.proxy ? ' (proxy)' : ''} · last {verification.lastClose} · {verificationTime(verification.asOf)}
   </div>
 );
 

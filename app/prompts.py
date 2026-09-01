@@ -53,7 +53,7 @@ LIVE_MARKET_VERIFICATION = """
 LIVE MARKET DATA VERIFICATION
 ==================================================
 
-Use the Oanda feed only to verify price sanity against the chart image.
+Use the live feed only to verify price sanity against the chart image.
 Infer the current price implied by the chart image and compare it with the
 live last close. If they differ by more than 0.5%, state that the chart
 appears stale in warnings and cap confidence at 40.
@@ -64,6 +64,10 @@ warnings.
 
 Never invent BOS, CHoCH, FVGs, order blocks or other structure from the
 numeric feed. Structure must come from the image.
+
+If the feed is marked as a proxy, its price is a related instrument rather than
+spot: use a 3% divergence threshold instead of 0.5% and never quote the feed
+price as the spot price.
 
 Do not restate the live feed as analysis.
 """
@@ -295,7 +299,7 @@ def build_forecast_prompt(
 ) -> str:
     suffix = ""
     verification = ""
-    if "LIVE MARKET DATA (Oanda," in market_context:
+    if "LIVE MARKET DATA (" in market_context:
         verification += LIVE_MARKET_VERIFICATION
     if "EXTERNAL RESEARCH (web," in market_context:
         verification += EXTERNAL_RESEARCH_VERIFICATION

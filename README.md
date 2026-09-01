@@ -51,11 +51,16 @@ per-IP API quota. `RATE_LIMIT_MAX_IDENTITIES` bounds the in-process rate-limit
 identity table. `TRUST_PROXY` is disabled by default; set it to the number of
 trusted reverse proxies (for example, `1` for Render or Cloudflare followed by
 the app) to use the corresponding rightmost `X-Forwarded-For` address for
-rate limiting. `OANDA_API_TOKEN` enables optional live Oanda verification for
-supported instruments. `OANDA_ENVIRONMENT` defaults to `practice`; set it to
-`live` only when the corresponding Oanda token is intended for the live
-environment. When the token is absent, the instrument is unknown, or Oanda is
-unavailable, forecasting continues with the previous screenshot-only behavior.
+rate limiting. Market verification uses a three-tier priority: Oanda when
+`OANDA_API_TOKEN` is set, Twelve Data when `TWELVEDATA_API_KEY` is set and
+Oanda is unavailable, then keyless Yahoo Finance when
+`MARKET_FALLBACK_ENABLED` (default `1`) is enabled. `OANDA_ENVIRONMENT` defaults
+to `practice`; set it to `live` only when the corresponding Oanda token is
+intended for the live environment. Yahoo Finance data is delayed, and its
+metals symbols use COMEX futures as a proxy for spot, so these feeds are for
+sanity-checking chart structure rather than exact-tick claims. When all feeds
+are unavailable, forecasting continues with the previous screenshot-only
+behavior.
 `MARKET_RESEARCH_ENABLED` defaults to `1` and controls external headline and
 event research. It costs one extra provider search call per forecast, adds
 latency, degrades silently to screenshot-only forecasting when unavailable,
@@ -82,8 +87,10 @@ To deploy:
    if `AI_PROVIDER=groq` is selected.
 3. Keep `AI_PROVIDER=openai` for the default OpenAI deployment, or select
    `groq` and provide its key. The Blueprint supplies defaults for the model,
-   username, proxy trust, rate limits, Oanda practice mode, and market
-   research. Enter `OANDA_API_TOKEN` to enable live market verification.
+   username, proxy trust, rate limits, Oanda practice mode, Twelve Data,
+   Yahoo fallback, and market research. Enter `OANDA_API_TOKEN` to prefer
+   Oanda live market verification; otherwise provide `TWELVEDATA_API_KEY` for
+   Twelve Data or use the keyless Yahoo Finance fallback.
 
 Render injects `PORT` at runtime; do not hardcode the public service port.
 Provider keys and authentication secrets are read only from Render environment
