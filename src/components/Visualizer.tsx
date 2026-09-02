@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { geminiService, drawAnnotationsOnCanvas } from '../services/geminiService';
+import { geminiService, drawAnnotationsOnCanvas, DEFAULT_FORECAST_DIRECTIVE } from '../services/geminiService';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa' | 'isyn';
 
@@ -68,7 +68,7 @@ const Visualizer: React.FC = () => {
   const [showOriginal, setShowOriginal] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
-  const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
+  const [prompt, setPrompt] = useState(DEFAULT_FORECAST_DIRECTIVE);
   const [processing, setProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOver, setIsOver] = useState(false);
@@ -446,7 +446,7 @@ const Visualizer: React.FC = () => {
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="Directives..."
-                  className="w-full h-16 bg-black/40 border border-white/10 rounded-lg p-3 text-[10px] focus:outline-none focus:ring-1 focus:ring-emerald-500/50 text-white resize-none shadow-inner font-mono"
+                  className="w-full h-40 overflow-y-auto bg-black/40 border border-white/10 rounded-lg p-3 text-[10px] focus:outline-none focus:ring-1 focus:ring-emerald-500/50 text-white resize-none shadow-inner font-mono"
                 />
                 <button
                   onClick={handleProcess}

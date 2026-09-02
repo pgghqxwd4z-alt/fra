@@ -751,12 +751,29 @@ function getFrameworkFallbackReason(errorMessage: string): string {
     : 'AI provider capacity is busy for this request.';
 }
 
+export const DEFAULT_FORECAST_DIRECTIVE = `Forecast the most likely next price move.
+
+Identify:
+- Current directional bias
+- Next liquidity event
+- Expected liquidity target
+- Expected retracement
+- Highest-probability entry zone
+- Invalidation
+- TP1
+- TP2
+- Final target
+
+Do not summarize what has already happened.
+
+Focus primarily on the future price path from the current market state.`;
+
 function buildFrameworkFallbackIntro(framework: string): string {
   return `AI provider capacity is busy, so QuantSage is showing a deterministic ${framework} framework instead of blocking the chart. Retry later for full AI chart-specific verification.`;
 }
 
 function buildFrameworkFallbackAnalysis(lens: string, prompt: string, errorMessage: string): string {
-  const directive = prompt.trim() || 'Identify institutional footprints and probabilistic entry zones.';
+  const directive = prompt.trim() || DEFAULT_FORECAST_DIRECTIVE;
   const fallbackReason = getFrameworkFallbackReason(errorMessage);
 
   if (lens === 'gs') {
