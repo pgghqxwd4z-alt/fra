@@ -21,8 +21,7 @@ const groqTokenReservations: { timestamp: number; reservedTokens: number }[] = [
 function getGroqHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (GROQ_PROXY_URL) {
-    const proxyAccessKey = globalThis.String(PROXY_ACCESS_KEY);
-    if (proxyAccessKey) headers['X-QuantSage-Proxy-Key'] = proxyAccessKey;
+    if (PROXY_ACCESS_KEY) headers['X-QuantSage-Proxy-Key'] = PROXY_ACCESS_KEY;
   } else {
     headers.Authorization = `Bearer ${GROQ_API_KEY}`;
   }
