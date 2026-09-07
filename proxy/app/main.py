@@ -64,10 +64,15 @@ VISION_CHAIN = _configured_chain("AI_VISION_PROVIDERS", "openai,anthropic,groq")
 TEXT_CHAIN = _configured_chain("AI_TEXT_PROVIDERS", "anthropic,openai,groq")
 
 
+ACCESS_POLICY_CONFIGURED = bool(PROXY_ACCESS_KEY) or PROXY_ALLOW_UNAUTHENTICATED
+
+
 @app.get("/health")
-async def health() -> dict:
-    return {
-        "ok": True,
+async def health() -> JSONResponse:
+    ready = ACCESS_POLICY_CONFIGURED and bool(VISION_CHAIN) and bool(TEXT_CHAIN)
+    body = {
+        "ok": ready,
+        "access_policy_configured": ACCESS_POLICY_CONFIGURED,
         "providers": {
             "openai": bool(OPENAI_API_KEY),
             "anthropic": bool(ANTHROPIC_API_KEY),
@@ -84,11 +89,12 @@ async def health() -> dict:
         "openai_primary": bool(VISION_CHAIN and VISION_CHAIN[0] == "openai"),
         "access_key_required": bool(PROXY_ACCESS_KEY),
     }
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 @app.post("/api/groq/chat/completions")
 async def groq_chat_completions(request: Request) -> JSONResponse:
-    if not PROXY_ACCESS_KEY and not PROXY_ALLOW_UNAUTHENTICATED:
+    if not ACCESS_POLICY_CONFIGURED:
         raise HTTPException(
             status_code=503,
             detail=(
