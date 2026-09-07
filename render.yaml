@@ -30,3 +30,5 @@ services:
         sync: false
       - key: VITE_PROXY_ACCESS_KEY
         sync: false
+      - key: VITE_APP_PASSWORD
+        sync: false
