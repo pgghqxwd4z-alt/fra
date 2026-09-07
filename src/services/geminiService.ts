@@ -1,13 +1,16 @@
 import type { ForecastResult } from '../types';
 
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_PROXY_URL = (import.meta.env.VITE_GROQ_PROXY_URL || '').replace(/\/+$/, '');
+const GROQ_REQUEST_TIMEOUT_MS = GROQ_PROXY_URL ? 150000 : 90000;
+const PROXY_ACCESS_KEY = import.meta.env.VITE_PROXY_ACCESS_KEY || '';
+const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL}/api/groq/chat/completions` : 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODELS = {
   vision: import.meta.env.VITE_GROQ_VISION_MODEL || 'qwen/qwen3.6-27b',
   text: import.meta.env.VITE_GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
   fast: import.meta.env.VITE_GROQ_FAST_MODEL || 'openai/gpt-oss-20b',
 } as const;
-const GROQ_TPM_LIMIT = readPositiveEnvNumber(import.meta.env.VITE_GROQ_TPM_LIMIT, 8000);
+const GROQ_TPM_LIMIT = readPositiveEnvNumber(import.meta.env.VITE_GROQ_TPM_LIMIT, GROQ_PROXY_URL ? 200000 : 8000);
 const GROQ_TPM_SAFETY_MARGIN = 300;
 const GROQ_MAX_TOKENS_FLOOR = 800;
 const GROQ_MAX_TOKENS_CAP = 4096;
@@ -15,6 +18,16 @@ const GROQ_HEALTHCHECK_MAX_TOKENS = 64;
 const GROQ_FORCE_FULL_PIPELINE = import.meta.env.VITE_GROQ_FORCE_FULL_PIPELINE === 'true';
 const GROQ_LOW_CAPACITY_MODE = GROQ_TPM_LIMIT <= 10000 && !GROQ_FORCE_FULL_PIPELINE;
 const groqTokenReservations: { timestamp: number; reservedTokens: number }[] = [];
+
+function getGroqHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (GROQ_PROXY_URL) {
+    if (PROXY_ACCESS_KEY) headers['X-QuantSage-Proxy-Key'] = PROXY_ACCESS_KEY;
+  } else {
+    headers.Authorization = `Bearer ${GROQ_API_KEY}`;
+  }
+  return headers;
+}
 
 function readPositiveEnvNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -766,10 +779,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
     await reserveGroqTokens(promptEstimate, GROQ_HEALTHCHECK_MAX_TOKENS, 'healthcheck');
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: getGroqHeaders(),
       body: JSON.stringify({
         model: GROQ_MODELS.text,
         messages: healthMessages,
@@ -848,15 +858,12 @@ async function callGroq(
     const start = Date.now();
     try {
       const reservation = await reserveGroqTokens(promptEstimate, maxTokens, stage);
-      // Add 90-second timeout to prevent hanging requests
+      // Abort hung requests
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000);
+      const timeoutId = setTimeout(() => controller.abort(), GROQ_REQUEST_TIMEOUT_MS);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: getGroqHeaders(),
         body: JSON.stringify({
           model,
           messages,
