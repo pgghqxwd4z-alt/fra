@@ -165,6 +165,27 @@ def test_select_result_falls_back_and_marks_header(monkeypatch):
     assert fallback is True
 
 
+def test_select_result_falls_back_after_timeout(monkeypatch):
+    async def first(_client, _payload):
+        return ProviderResult(504, {"error": {"message": "timed out"}}, {})
+
+    async def second(_client, _payload):
+        return ProviderResult(200, {"ok": True}, {})
+
+    monkeypatch.setattr(
+        providers,
+        "PROVIDER_ADAPTERS",
+        {"first": first, "second": second},
+    )
+    provider, result, fallback = asyncio.run(
+        select_result(None, {}, ["first", "second"])
+    )
+
+    assert provider == "second"
+    assert result.status_code == 200
+    assert fallback is True
+
+
 def test_select_result_returns_last_result_when_all_fail(monkeypatch):
     async def first(_client, _payload):
         return ProviderResult(503, {"error": {"message": "down"}}, {})

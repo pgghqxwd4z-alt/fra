@@ -2,6 +2,7 @@ import type { ForecastResult } from '../types';
 
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
 const GROQ_PROXY_URL = (import.meta.env.VITE_GROQ_PROXY_URL || '').replace(/\/+$/, '');
+const GROQ_REQUEST_TIMEOUT_MS = GROQ_PROXY_URL ? 150000 : 90000;
 const PROXY_ACCESS_KEY = import.meta.env.VITE_PROXY_ACCESS_KEY || '';
 const GROQ_API_URL = GROQ_PROXY_URL ? `${GROQ_PROXY_URL}/api/groq/chat/completions` : 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODELS = {
@@ -857,9 +858,9 @@ async function callGroq(
     const start = Date.now();
     try {
       const reservation = await reserveGroqTokens(promptEstimate, maxTokens, stage);
-      // Add 90-second timeout to prevent hanging requests
+      // Abort hung requests
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000);
+      const timeoutId = setTimeout(() => controller.abort(), GROQ_REQUEST_TIMEOUT_MS);
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
         headers: getGroqHeaders(),

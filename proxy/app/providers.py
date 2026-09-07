@@ -15,7 +15,7 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
 OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-4o-mini")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -76,7 +76,7 @@ def _error_result(status_code: int, provider: str, message: str) -> ProviderResu
 
 
 def _timeout() -> httpx.Timeout:
-    return httpx.Timeout(95.0, connect=15.0)
+    return httpx.Timeout(60.0, connect=10.0)
 
 
 async def call_groq(client: httpx.AsyncClient, payload: dict) -> ProviderResult:
@@ -88,6 +88,7 @@ async def call_groq(client: httpx.AsyncClient, payload: dict) -> ProviderResult:
                 "Content-Type": "application/json",
             },
             json=payload,
+            timeout=_timeout(),
         )
         return _result_from_response(response, "Groq")
     except httpx.TimeoutException:
@@ -113,6 +114,7 @@ async def call_openai(client: httpx.AsyncClient, payload: dict) -> ProviderResul
                 "Content-Type": "application/json",
             },
             json=openai_payload,
+            timeout=_timeout(),
         )
         return _result_from_response(response, "OpenAI")
     except httpx.TimeoutException:
@@ -262,6 +264,7 @@ async def call_anthropic(client: httpx.AsyncClient, payload: dict) -> ProviderRe
                 "content-type": "application/json",
             },
             json=anthropic_payload,
+            timeout=_timeout(),
         )
         content = _response_content(response, "Anthropic")
         if response.is_success or content.get("type") == "error":

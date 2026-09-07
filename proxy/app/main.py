@@ -22,6 +22,9 @@ from .providers import (
 )
 
 PROXY_ACCESS_KEY = os.environ.get("PROXY_ACCESS_KEY", "").strip()
+PROXY_ALLOW_UNAUTHENTICATED = (
+    os.environ.get("PROXY_ALLOW_UNAUTHENTICATED", "").strip().lower() == "true"
+)
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -85,6 +88,14 @@ async def health() -> dict:
 
 @app.post("/api/groq/chat/completions")
 async def groq_chat_completions(request: Request) -> JSONResponse:
+    if not PROXY_ACCESS_KEY and not PROXY_ALLOW_UNAUTHENTICATED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PROXY_ACCESS_KEY is not configured; set it or "
+                "PROXY_ALLOW_UNAUTHENTICATED=true for local development"
+            ),
+        )
     if PROXY_ACCESS_KEY and not hmac.compare_digest(
         request.headers.get("X-QuantSage-Proxy-Key", ""),
         PROXY_ACCESS_KEY,
