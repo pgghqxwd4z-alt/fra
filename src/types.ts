@@ -144,6 +144,12 @@ export interface Risk {
   warnings: string[];
 }
 
+export interface FastScan {
+  bias: MarketBias;
+  keyLevels: string[];
+  note: string;
+}
+
 export interface ConsensusModel {
   engine: string;
   model: string;

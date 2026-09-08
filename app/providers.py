@@ -19,7 +19,7 @@ from .prompts import (
     build_research_prompt,
     build_retrieval_prompt,
 )
-from .schemas import FORECAST_SCHEMA, KNOWLEDGE_SCHEMA, RESEARCH_SCHEMA, source_for
+from .schemas import FORECAST_SCHEMA, KNOWLEDGE_SCHEMA, RESEARCH_SCHEMA, SCAN_SCHEMA, source_for
 
 
 PRIVATE_CITATION_RE = re.compile(
@@ -885,6 +885,51 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             "knowledge": {"items": knowledge["items"], "warnings": knowledge["warnings"]},
             "engine": engine_name,
             "model": model,
+        }
+
+    async def scan(self, base64_image: str, prompt: str, instrument: str | None = None) -> dict[str, Any]:
+        client = self._require_openai("groq")
+        scan_prompt = f"""Perform a fast, preliminary visual market scan for {instrument or "the supplied chart"}.
+
+This is not a forecast and must not contain a tradeable call. Do not provide confidence,
+an entry, targets, TP levels, invalidation, stop, or position guidance. Return exactly
+one JSON object with bias, up to four observable keyLevels, and one concise sentence note.
+
+USER DIRECTIVE:
+{prompt or "Scan the supplied chart."}
+
+Return ONLY valid JSON matching this schema:
+{json.dumps(SCAN_SCHEMA, indent=2)}"""
+        result = await client.chat.completions.create(
+            model=self.groq_vision_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
+                        {"type": "text", "text": scan_prompt},
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},
+        )
+        text = result.choices[0].message.content
+        if not text:
+            raise RuntimeError("No response text from Groq scan")
+        raw_scan = parse_json_object(text)
+        bias = raw_scan.get("bias")
+        key_levels = raw_scan.get("keyLevels")
+        note = raw_scan.get("note")
+        if bias not in {"BULLISH", "BEARISH", "NEUTRAL"}:
+            raise RuntimeError("Groq scan returned invalid bias")
+        if not isinstance(key_levels, list) or any(not isinstance(level, str) for level in key_levels):
+            raise RuntimeError("Groq scan returned invalid key levels")
+        if not isinstance(note, str) or not note.strip():
+            raise RuntimeError("Groq scan returned invalid note")
+        return {
+            "bias": bias,
+            "keyLevels": [level.strip() for level in key_levels[:4]],
+            "note": note.strip(),
         }
 
     async def chat(self, prompt: str, history: list[dict[str, Any]], engine: str | None = None) -> dict[str, Any]:

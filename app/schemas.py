@@ -30,6 +30,17 @@ KNOWLEDGE_SOURCES = [
     {"id": "institutional-overlay", "title": "Institutional / Macro Overlay", "kind": "FRAMEWORK"},
 ]
 
+SCAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "bias": {"type": "string", "enum": ["BULLISH", "BEARISH", "NEUTRAL"]},
+        "keyLevels": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+        "note": {"type": "string", "description": "One concise sentence describing the preliminary chart read."},
+    },
+    "required": ["bias", "keyLevels", "note"],
+    "additionalProperties": False,
+}
+
 KNOWLEDGE_SCHEMA = {
     "type": "object",
     "properties": {

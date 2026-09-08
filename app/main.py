@@ -35,6 +35,7 @@ MAX_BODY_BYTES = 8 * 1024 * 1024
 RATE_LIMIT_WINDOW = max(1, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
 RATE_LIMIT_QUOTA = max(1, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30")))
 RATE_LIMIT_MAX_IDENTITIES = max(1, int(os.getenv("RATE_LIMIT_MAX_IDENTITIES", "4096")))
+GROQ_SCAN_TIMEOUT_SECONDS = 15
 TRUST_PROXY_VALUE = os.getenv("TRUST_PROXY", "").strip().lower()
 try:
     TRUSTED_PROXY_HOPS = max(0, int(TRUST_PROXY_VALUE))
@@ -191,6 +192,10 @@ def consensus_enabled() -> bool:
     return os.getenv("CONSENSUS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 
 
+def groq_scan_enabled() -> bool:
+    return os.getenv("GROQ_SCAN_ENABLED", "").strip().lower() not in {"", "0", "false", "no"}
+
+
 def consensus_engines() -> list[str]:
     configured = [value.strip().lower() for value in os.getenv("CONSENSUS_ENGINES", "openai,claude,gemini").split(",")]
     engines: list[str] = []
@@ -337,34 +342,38 @@ async def annotate(payload: dict[str, Any]) -> Any:
         use_consensus = consensus_enabled() and len(engines) >= 2
         if not use_consensus:
             engines = [provider.name]
-        if use_consensus:
-            attempts = await asyncio.gather(
-                *(
-                    provider.annotate(
-                        payload.get("base64Image", ""),
-                        prompt,
-                        lenses,
-                        market_context,
-                        instructions,
-                        knowledge,
-                        engine=engine,
-                    )
-                    for engine in engines
+        forecast_tasks = [
+            provider.annotate(
+                payload.get("base64Image", ""),
+                prompt,
+                lenses,
+                market_context,
+                instructions,
+                knowledge,
+                engine=engine,
+            )
+            for engine in engines
+        ]
+        scan_enabled = groq_scan_enabled() and provider.has_engine("groq")
+        scan_attempt: Any = None
+        if scan_enabled:
+            gathered = await asyncio.gather(
+                *forecast_tasks,
+                asyncio.wait_for(
+                    provider.scan(payload.get("base64Image", ""), prompt, instrument),
+                    timeout=GROQ_SCAN_TIMEOUT_SECONDS,
                 ),
                 return_exceptions=True,
             )
+            attempts = gathered[:-1]
+            scan_attempt = gathered[-1]
+            if isinstance(scan_attempt, BaseException):
+                logger.warning("Groq scan failed: %s", scan_attempt)
         else:
-            attempts = [
-                await provider.annotate(
-                    payload.get("base64Image", ""),
-                    prompt,
-                    lenses,
-                    market_context,
-                    instructions,
-                    knowledge,
-                    engine=provider.name,
-                )
-            ]
+            if use_consensus:
+                attempts = await asyncio.gather(*forecast_tasks, return_exceptions=True)
+            else:
+                attempts = [await forecast_tasks[0]]
         successes: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         for engine, attempt in zip(engines, attempts):
@@ -387,6 +396,8 @@ async def annotate(payload: dict[str, Any]) -> Any:
             result.get("forecast", {}),
             market_data.verification if market_data else None,
         )
+        if isinstance(scan_attempt, dict):
+            result["scan"] = scan_attempt
         try:
             forecast_ids = []
             forecast_ids_by_engine: dict[str, str | None] = {}

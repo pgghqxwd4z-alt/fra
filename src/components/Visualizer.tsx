@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { Consensus, ForecastResult, MarketResearch, MarketVerification, Risk } from '../types';
+import { Consensus, FastScan, ForecastResult, MarketResearch, MarketVerification, Risk } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -44,6 +44,16 @@ const MarketResearchSummary: React.FC<{
     <div className={fullscreen ? 'text-xs text-sky-300/70 font-mono' : 'text-[7px] text-sky-300/70 font-mono'}>
       Research: {research.headlines.length} headlines · {research.biasSignal}
       {nextEvent && ` · next ${nextEvent.name} ${nextEvent.whenUtc || 'time TBC'}`}
+    </div>
+  );
+};
+
+const FastScanLine: React.FC<{ scan?: FastScan; fullscreen?: boolean }> = ({ scan, fullscreen = false }) => {
+  if (!scan) return null;
+  const levels = scan.keyLevels.length ? scan.keyLevels.join(', ') : 'no key levels';
+  return (
+    <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} text-slate-500 font-mono truncate`} title={scan.note}>
+      Fast scan (preliminary — not part of consensus) · {scan.bias} · Levels {levels} · {scan.note}
     </div>
   );
 };
@@ -302,6 +312,7 @@ const Visualizer: React.FC = () => {
   const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
   const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
   const [consensus, setConsensus] = useState<Consensus | null>(null);
+  const [scan, setScan] = useState<FastScan | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [prompt, setPrompt] = useState(`
@@ -377,6 +388,7 @@ Focus primarily on the future price path from the current market state.
       setAnalysis(null);
       setMarketVerification(null);
       setMarketResearch(null);
+      setScan(null);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -457,6 +469,7 @@ Focus primarily on the future price path from the current market state.
       setMarketVerification(result.marketVerification || null);
       setMarketResearch(result.marketResearch || null);
       setConsensus(result.consensus || null);
+      setScan(result.scan || null);
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
@@ -578,6 +591,7 @@ Focus primarily on the future price path from the current market state.
                       setMarketVerification(null);
                       setMarketResearch(null);
                       setConsensus(null);
+                      setScan(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
@@ -642,6 +656,7 @@ Focus primarily on the future price path from the current market state.
 
                 {marketVerification && <MarketVerificationLine verification={marketVerification} />}
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
+                <FastScanLine scan={scan || undefined} />
                 <ConsensusStrip consensus={consensus || undefined} />
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
@@ -787,6 +802,7 @@ Focus primarily on the future price path from the current market state.
                 <MarketResearchSources research={marketResearch} />
               </>
             )}
+            <FastScanLine scan={scan || undefined} fullscreen />
             <ConsensusStrip consensus={consensus || undefined} fullscreen />
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>

@@ -34,6 +34,10 @@ bias/direction; `CONFLICT` means at least one opposite bias or direction;
 confidence; partial agreement caps it at 60 and conflict caps it at 45.
 Consensus costs one provider call per engine per analysis. Per-model hit rates
 need weeks of resolved forecasts before they mean anything.
+The optional Groq fast scan is disabled by default; set `GROQ_SCAN_ENABLED=1`
+only after verifying `GROQ_API_KEY`. It is a preliminary, non-gating chart read
+that runs outside the forecast vote, is excluded from consensus, and is not
+scored.
 
 ```sh
 npm install
@@ -119,7 +123,8 @@ To deploy:
    `render.yaml` and builds the declared Docker web service.
 2. Enter `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `APP_PASSWORD` when prompted
    or in the Render service environment. `GROQ_API_KEY` is also declared as a
-   secret placeholder if `AI_PROVIDER=groq` is selected.
+   secret placeholder if `AI_PROVIDER=groq` is selected. `GROQ_SCAN_ENABLED`
+   remains opt-in and should stay `0` until the Groq key has been verified.
 3. Keep `AI_PROVIDER=openai` for the default OpenAI deployment, or select
    `claude`/`groq`/`gemini` and provide its key. The Blueprint supplies defaults for the model,
    username, proxy trust, rate limits, Oanda practice mode, Twelve Data,

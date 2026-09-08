@@ -25,6 +25,8 @@ services:
         value: groq/compound
       - key: GROQ_VISION_MODEL
         value: qwen/qwen3.6-27b
+      - key: GROQ_SCAN_ENABLED
+        value: "0"
       - key: CONSENSUS_ENABLED
         value: "1"
       - key: CONSENSUS_ENGINES
