@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import os
-import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from . import market
+from .risk import extract_level
 
 
 logger = logging.getLogger("quantsage")
 
-LEVEL_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
 STATUSES = {"pending", "tp1", "tp2", "final", "invalidated", "ambiguous", "expired", "unscorable"}
 
 
@@ -100,21 +99,6 @@ def _open_db() -> sqlite3.Connection:
     return connection
 
 
-def extract_level(text: str, reference: float) -> float | None:
-    if not isinstance(text, str) or not math.isfinite(reference):
-        return None
-    lower = reference * 0.75
-    upper = reference * 1.25
-    for candidate in LEVEL_RE.findall(text):
-        try:
-            value = float(candidate.replace(",", ""))
-        except ValueError:
-            continue
-        if lower <= value <= upper:
-            return value
-    return None
-
-
 def _forecast_values(forecast: dict[str, Any], verification: dict[str, Any] | None) -> dict[str, Any]:
     entry = forecast.get("entry") if isinstance(forecast.get("entry"), dict) else {}
     targets = forecast.get("targets") if isinstance(forecast.get("targets"), dict) else {}
@@ -155,7 +139,7 @@ def record_forecast(
     instrument: str | None,
     verification: dict[str, Any] | None,
     engine: str | None = None,
-    consensus: dict[str, Any] | None = None,
+    consensus: dict[str, Any] | str | None = None,
 ) -> str | None:
     if not _enabled() or instrument is None:
         return None
@@ -204,7 +188,9 @@ def record_forecast(
                 status,
                 reason,
                 engine,
-                json.dumps(consensus, separators=(",", ":")) if consensus is not None else None,
+                consensus.get("verdict")
+                if isinstance(consensus, dict)
+                else consensus,
             ),
         )
         connection.commit()

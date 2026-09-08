@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import math
 import re
@@ -8,6 +9,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from anthropic import AsyncAnthropic
+from google import genai
+from google.genai import types as gemini_types
 from openai import AsyncOpenAI
 
 from .prompts import (
@@ -265,6 +268,34 @@ def map_groq_grounding(result: Any) -> list[dict[str, dict[str, str]]]:
     return chunks
 
 
+def map_gemini_grounding(result: Any) -> list[dict[str, dict[str, str]]]:
+    metadatas = [object_dict(getattr(result, "grounding_metadata", None))]
+    metadatas.extend(
+        object_dict(getattr(candidate, "grounding_metadata", None))
+        for candidate in (getattr(result, "candidates", None) or [])
+    )
+    mapped: list[dict[str, dict[str, str]]] = []
+    seen: set[str] = set()
+    for metadata in metadatas:
+        chunks = (
+            metadata.get("grounding_chunks", metadata.get("groundingChunks", []))
+            if isinstance(metadata, dict)
+            else []
+        )
+        for item in chunks if isinstance(chunks, list) else []:
+            item = object_dict(item)
+            web = object_dict(item.get("web")) if isinstance(item, dict) else None
+            uri = web.get("uri") if isinstance(web, dict) else None
+            if not isinstance(uri, str) or not re.match(r"https?://", uri, re.IGNORECASE):
+                continue
+            normalized = _normalized_uri(uri)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            mapped.append({"web": {"uri": uri, "title": str(web.get("title") or uri)}})
+    return mapped
+
+
 def map_claude_grounding(message: Any) -> list[dict[str, dict[str, str]]]:
     chunks: list[dict[str, dict[str, str]]] = []
     seen: set[str] = set()
@@ -304,22 +335,27 @@ class AIProvider:
         import os
 
         provider = (os.getenv("AI_PROVIDER") or "openai").strip().lower()
-        self.name = provider if provider in {"openai", "groq", "claude"} else "openai"
+        self.name = provider if provider in {"openai", "groq", "claude", "gemini"} else "openai"
         self.openai_model = os.getenv("OPENAI_MODEL") or "gpt-4o"
         self.groq_model = os.getenv("GROQ_MODEL") or "groq/compound"
         self.groq_vision_model = os.getenv("GROQ_VISION_MODEL") or "qwen/qwen3.6-27b"
         self.claude_model = os.getenv("CLAUDE_MODEL") or "claude-sonnet-5"
+        self.gemini_model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
         openai_key = os.getenv("OPENAI_API_KEY")
         groq_key = os.getenv("GROQ_API_KEY")
         claude_key = os.getenv("ANTHROPIC_API_KEY")
-        self._clients: dict[str, AsyncOpenAI | AsyncAnthropic] = {}
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        self._clients: dict[str, AsyncOpenAI | AsyncAnthropic | genai.Client] = {}
         if openai_key:
             self._clients["openai"] = AsyncOpenAI(api_key=openai_key)
         if groq_key:
             self._clients["groq"] = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
         if claude_key:
             self._clients["claude"] = AsyncAnthropic(api_key=claude_key)
+        if gemini_key:
+            self._clients["gemini"] = genai.Client(api_key=gemini_key)
         self.client = self._clients.get(self.name)
+        self._gemini_schema_supported: bool | None = None
 
     @property
     def missing_key_message(self) -> str:
@@ -327,7 +363,7 @@ class AIProvider:
 
     @staticmethod
     def missing_key_message_for(engine: str) -> str:
-        return f"{ {'openai': 'OPENAI', 'groq': 'GROQ', 'claude': 'ANTHROPIC'}.get(engine, 'OPENAI') }_API_KEY environment variable is not set."
+        return f"{ {'openai': 'OPENAI', 'groq': 'GROQ', 'claude': 'ANTHROPIC', 'gemini': 'GEMINI'}.get(engine, 'OPENAI') }_API_KEY environment variable is not set."
 
     def has_engine(self, engine: str) -> bool:
         return engine in self._clients
@@ -344,11 +380,58 @@ class AIProvider:
             raise RuntimeError(self.missing_key_message_for("claude"))
         return client
 
-    def require_client(self) -> AsyncOpenAI | AsyncAnthropic:
+    def _require_gemini(self) -> genai.Client:
+        client = self._clients.get("gemini")
+        if not isinstance(client, genai.Client):
+            raise RuntimeError(self.missing_key_message_for("gemini"))
+        return client
+
+    def require_client(self) -> AsyncOpenAI | AsyncAnthropic | genai.Client:
         client = self._clients.get(self.name)
         if client is None:
             raise RuntimeError(self.missing_key_message)
         return client
+
+    @staticmethod
+    def _gemini_schema_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "response_schema" in message or "additional_properties" in message or "invalid json payload" in message
+
+    async def _gemini_json(
+        self,
+        client: genai.Client,
+        contents: Any,
+        schema: dict[str, Any],
+        include_schema: bool,
+        tools: list[Any] | None = None,
+    ) -> Any:
+        if self._gemini_schema_supported is not False:
+            try:
+                response = await client.aio.models.generate_content(
+                    model=self.gemini_model,
+                    contents=contents,
+                    config=gemini_types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=schema,
+                        tools=tools,
+                    ),
+                )
+            except Exception as error:
+                if not self._gemini_schema_error(error):
+                    raise
+                self._gemini_schema_supported = False
+            else:
+                self._gemini_schema_supported = True
+                return response
+        response = await client.aio.models.generate_content(
+            model=self.gemini_model,
+            contents=contents,
+            config=gemini_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                tools=tools,
+            ),
+        )
+        return response
 
     async def retrieve_knowledge(
         self,
@@ -361,6 +444,31 @@ class AIProvider:
         source_ids = route_knowledge(lenses)
         source_text = "\n".join(f"- {source_id}" for source_id in source_ids)
         retrieval_prompt = build_retrieval_prompt(prompt, market_context, source_text)
+        if engine_name == "gemini":
+            client = self._require_gemini()
+            search = await client.aio.models.generate_content(
+                model=self.gemini_model,
+                contents=retrieval_prompt,
+                config=gemini_types.GenerateContentConfig(
+                    tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
+                ),
+            )
+            source_material = search.text or "No web search material was returned."
+            result = await self._gemini_json(
+                client,
+                f"""{retrieval_prompt}
+
+WEB SEARCH MATERIAL:
+{source_material}
+
+Convert the material above into the requested JSON schema. Return JSON only.""",
+                KNOWLEDGE_SCHEMA,
+                include_schema=True,
+            )
+            text = result.text or ""
+            if not text:
+                return {"items": [], "context": "NO EXTERNAL KNOWLEDGE RETRIEVED.", "warnings": ["Knowledge retrieval returned no text."]}
+            return self.map_knowledge_result(parse_json_object(text))
         if engine_name == "claude":
             client = self._require_claude()
             search_result = await client.messages.create(
@@ -557,6 +665,31 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
     async def research_market(self, label: str, engine: str | None = None) -> dict[str, Any]:
         engine_name = engine or self.name
         research_prompt = build_research_prompt(label)
+        if engine_name == "gemini":
+            client = self._require_gemini()
+            search = await client.aio.models.generate_content(
+                model=self.gemini_model,
+                contents=research_prompt,
+                config=gemini_types.GenerateContentConfig(
+                    tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
+                ),
+            )
+            source_material = search.text or "No web search material was returned."
+            result = await self._gemini_json(
+                client,
+                f"""{research_prompt}
+
+WEB SEARCH MATERIAL:
+{source_material}
+
+Convert the material above into the requested JSON schema. Return JSON only.""",
+                RESEARCH_SCHEMA,
+                include_schema=True,
+            )
+            text = result.text or ""
+            if not text:
+                raise RuntimeError("No response text from model")
+            return self.map_research_result(parse_json_object(text), map_gemini_grounding(search))
         if engine_name == "claude":
             client = self._require_claude()
             search_result = await client.messages.create(
@@ -642,9 +775,21 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             "\n".join(knowledge["warnings"]) if knowledge["warnings"] else "",
             market_context,
             prompt,
-            engine_name == "groq",
+            engine_name in {"groq", "gemini"},
         )
-        if engine_name == "claude":
+        if engine_name == "gemini":
+            client = self._require_gemini()
+            contents = [
+                gemini_types.Part.from_bytes(data=base64.b64decode(base64_image), mime_type="image/png"),
+                augmented_prompt,
+            ]
+            result = await self._gemini_json(client, contents, FORECAST_SCHEMA, include_schema=True)
+            text = result.text or ""
+            if not text:
+                raise RuntimeError("No response text from model")
+            forecast = normalize_forecast(parse_json_object(text))
+            model = self.gemini_model
+        elif engine_name == "claude":
             client = self._require_claude()
             message = await client.messages.create(
                 model=self.claude_model,
@@ -711,6 +856,32 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
 
     async def chat(self, prompt: str, history: list[dict[str, Any]], engine: str | None = None) -> dict[str, Any]:
         engine_name = engine or self.name
+        if engine_name == "gemini":
+            client = self._require_gemini()
+            contents = []
+            for entry in history or []:
+                contents.append(
+                    {
+                        "role": "model" if entry.get("role") in {"model", "assistant"} else "user",
+                        "parts": [{"text": (entry.get("parts") or [{}])[0].get("text") or entry.get("text") or ""}],
+                    }
+                )
+            contents.append({"role": "user", "parts": [{"text": prompt}]})
+            search = await client.aio.models.generate_content(
+                model=self.gemini_model,
+                contents=contents,
+                config=gemini_types.GenerateContentConfig(
+                    system_instruction=FORECAST_SYSTEM_PROMPT,
+                    tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
+                ),
+            )
+            material = search.text or "Search grounding was unavailable; answer from the supplied context."
+            answer = await client.aio.models.generate_content(
+                model=self.gemini_model,
+                contents=contents + [{"role": "user", "parts": [{"text": f"WEB SEARCH MATERIAL:\n{material}\n\nAnswer the user's request now."}]}],
+                config=gemini_types.GenerateContentConfig(system_instruction=FORECAST_SYSTEM_PROMPT),
+            )
+            return {"text": strip_citation_markers(answer.text or ""), "grounding": map_gemini_grounding(search)}
         if engine_name == "claude":
             client = self._require_claude()
             messages = []

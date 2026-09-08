@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { Consensus, ForecastResult, MarketResearch, MarketVerification } from '../types';
+import { Consensus, ForecastResult, MarketResearch, MarketVerification, Risk } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -84,6 +84,7 @@ const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> 
     PARTIAL: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
     CONFLICT: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
     SINGLE: 'border-slate-400/30 bg-slate-400/10 text-slate-300',
+    MAJORITY: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
   }[consensus.verdict];
   return (
     <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
@@ -92,13 +93,15 @@ const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> 
           Model consensus
         </div>
         <span className={`rounded-full border px-2 py-0.5 font-mono font-bold ${fullscreen ? 'text-xs' : 'text-[7px]'} ${badgeClass}`}>
-          {consensus.verdict}
+          {consensus.verdict}{consensus.vote && ` · ${consensus.vote.support}/${consensus.vote.total}`}
         </span>
       </div>
       <div className={fullscreen ? 'mt-3 space-y-2' : 'mt-2 space-y-1'}>
         {consensus.models.map((model) => (
           <div key={model.engine} className={`flex flex-wrap gap-x-3 gap-y-1 font-mono text-slate-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
-            <span className="text-white">{model.engine}</span>
+            <span className={model.engine === consensus.selectedEngine ? 'font-bold text-emerald-300' : 'text-white'}>
+              {model.engine === consensus.selectedEngine && '● '}{model.engine}
+            </span>
             <span>{model.bias}/{model.direction}</span>
             <span>{model.confidence}%</span>
             {fullscreen && <span>TP1 {model.tp1}</span>}
@@ -111,6 +114,33 @@ const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> 
       {consensus.failures.length > 0 && (
         <div className={`mt-2 space-y-1 text-rose-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
           {consensus.failures.map((failure) => <div key={failure.engine}>⚠ {failure.engine}: {failure.error}</div>)}
+        </div>
+      )}
+    </section>
+  );
+};
+
+const RiskSummary: React.FC<{ risk?: Risk; fullscreen?: boolean }> = ({ risk, fullscreen = false }) => {
+  if (!risk) return null;
+  if (!risk.parsed) {
+    return <div className={fullscreen ? 'text-sm text-slate-500' : 'text-[7px] text-slate-500'}>Levels not numeric</div>;
+  }
+  const targets = risk.targets || {};
+  const format = (value: number | null | undefined) => value == null ? '—' : value.toFixed(2);
+  return (
+    <section className={fullscreen ? 'rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-emerald-400' : 'text-[6px] font-bold uppercase tracking-widest text-emerald-400'}>
+        Risk
+      </div>
+      <div className={fullscreen ? 'mt-3 grid grid-cols-4 gap-3 text-xs font-mono text-slate-300' : 'mt-2 grid grid-cols-4 gap-1.5 text-[7px] font-mono text-slate-300'}>
+        <span>R {format(risk.risk)}</span>
+        <span>TP1 {format(targets.tp1?.rr)}R</span>
+        <span>TP2 {format(targets.tp2?.rr)}R</span>
+        <span>Final {format(targets.final?.rr)}R</span>
+      </div>
+      {risk.warnings.length > 0 && (
+        <div className={`mt-2 space-y-1 text-rose-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {risk.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
         </div>
       )}
     </section>
@@ -213,6 +243,8 @@ const ForecastDetails: React.FC<{
           <Field label="Final Target" value={nonEmpty(forecast.targets?.final)} />
         </div>
       )}
+
+      <RiskSummary risk={forecast.risk} fullscreen={!compact} />
 
       {evidence.length > 0 && (
         <section className={sectionClass}>
@@ -421,7 +453,7 @@ Focus primarily on the future price path from the current market state.
       const result = await aiService.annotateChart(base64, prompt, selectedLenses);
       setResultImage(result.image);
       setAnalysis(result.analysis);
-      setForecast(result.forecast);
+      setForecast(result.forecast ? { ...result.forecast, risk: result.risk } : null);
       setMarketVerification(result.marketVerification || null);
       setMarketResearch(result.marketResearch || null);
       setConsensus(result.consensus || null);

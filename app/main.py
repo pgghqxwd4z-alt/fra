@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import asyncio
+import copy
 import hmac
 import ipaddress
 import json
@@ -23,6 +24,7 @@ from .forecast_log import recent, record_forecast, score_pending, stats
 from .market import fetch_market_data, resolve_instrument
 from .providers import AIProvider
 from .research import fetch_market_research
+from .risk import calculate_risk
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -190,16 +192,19 @@ def consensus_enabled() -> bool:
 
 
 def consensus_engines() -> list[str]:
-    configured = [value.strip().lower() for value in os.getenv("CONSENSUS_ENGINES", "openai,claude").split(",")]
+    configured = [value.strip().lower() for value in os.getenv("CONSENSUS_ENGINES", "openai,claude,gemini").split(",")]
     engines: list[str] = []
     for engine in [provider.name, *configured]:
-        if engine not in {"openai", "groq", "claude"} or not provider.has_engine(engine) or engine in engines:
+        if engine not in {"openai", "groq", "claude", "gemini"} or not provider.has_engine(engine) or engine in engines:
             continue
         engines.append(engine)
     return engines
 
 
-def build_consensus(successes: list[dict[str, Any]], failures: list[dict[str, str]]) -> dict[str, Any]:
+def build_consensus(
+    successes: list[dict[str, Any]],
+    failures: list[dict[str, str]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     models = [
         {
             "engine": result["engine"],
@@ -213,6 +218,14 @@ def build_consensus(successes: list[dict[str, Any]], failures: list[dict[str, st
         }
         for result in successes
     ]
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for model in models:
+        groups.setdefault((model["bias"], model["direction"]), []).append(model)
+    winning_group = max(groups.values(), key=len) if groups else []
+    support = len(winning_group)
+    total = len(models)
+    vote_bias = winning_group[0]["bias"] if winning_group else None
+    vote_direction = winning_group[0]["direction"] if winning_group else None
     if len(models) < 2:
         verdict = "SINGLE"
     else:
@@ -220,8 +233,10 @@ def build_consensus(successes: list[dict[str, Any]], failures: list[dict[str, st
         directions = {model["direction"] for model in models}
         opposite_biases = {"BULLISH", "BEARISH"} <= biases
         opposite_directions = {"BUY", "SELL"} <= directions
-        if len(biases) == 1 and len(directions) == 1:
+        if support == total:
             verdict = "AGREE"
+        elif support > total / 2:
+            verdict = "MAJORITY"
         elif opposite_biases or opposite_directions:
             verdict = "CONFLICT"
         else:
@@ -230,7 +245,7 @@ def build_consensus(successes: list[dict[str, Any]], failures: list[dict[str, st
         f"{model['engine']} {model['bias']}/{model['direction']} {model['confidence']}" for model in models
     )
     confidences = [model["confidence"] for model in models]
-    return {
+    consensus = {
         "verdict": verdict,
         "models": models,
         "biasAgreement": len({model["bias"] for model in models}) <= 1,
@@ -238,13 +253,28 @@ def build_consensus(successes: list[dict[str, Any]], failures: list[dict[str, st
         "confidenceSpread": max(confidences) - min(confidences) if confidences else 0,
         "notes": notes,
         "failures": failures,
+        "vote": {"bias": vote_bias, "direction": vote_direction, "support": support, "total": total},
+        "selectedEngine": successes[0]["engine"] if successes else None,
     }
+    selected = successes[0]
+    if verdict == "MAJORITY":
+        winning_engines = {model["engine"] for model in winning_group}
+        if selected["engine"] not in winning_engines:
+            selected_model = max(winning_group, key=lambda model: model["confidence"])
+            selected = next(result for result in successes if result["engine"] == selected_model["engine"])
+        consensus["selectedEngine"] = selected["engine"]
+    return consensus, selected
 
 
 def apply_consensus_cap(result: dict[str, Any], consensus: dict[str, Any]) -> None:
     forecast = result["forecast"]
     verdict = consensus["verdict"]
-    if verdict == "PARTIAL":
+    if verdict == "MAJORITY":
+        forecast["confidence"] = min(forecast["confidence"], 70)
+        forecast.setdefault("warnings", []).append(
+            f"Model consensus majority: {consensus['vote']['support']}/{consensus['vote']['total']} — {consensus['notes']}."
+        )
+    elif verdict == "PARTIAL":
         forecast["confidence"] = min(forecast["confidence"], 60)
         forecast.setdefault("warnings", []).append(f"Model consensus partial: {consensus['notes']}.")
     elif verdict == "CONFLICT":
@@ -304,7 +334,10 @@ async def annotate(payload: dict[str, Any]) -> Any:
         knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
         instructions = "\n".join(lens_instructions(lenses))
         engines = consensus_engines()
-        if consensus_enabled() and len(engines) >= 2:
+        use_consensus = consensus_enabled() and len(engines) >= 2
+        if not use_consensus:
+            engines = [provider.name]
+        if use_consensus:
             attempts = await asyncio.gather(
                 *(
                     provider.annotate(
@@ -334,7 +367,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
             ]
         successes: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
-        for engine, attempt in zip(engines if consensus_enabled() and len(engines) >= 2 else [provider.name], attempts):
+        for engine, attempt in zip(engines, attempts):
             if isinstance(attempt, Exception):
                 logger.warning("Consensus %s annotation failed: %s", engine, attempt)
                 failures.append({"engine": engine, "error": str(attempt)})
@@ -343,17 +376,20 @@ async def annotate(payload: dict[str, Any]) -> Any:
         if not successes:
             first_failure = next((attempt for attempt in attempts if isinstance(attempt, Exception)), RuntimeError("AI request failed"))
             raise first_failure
-        consensus = build_consensus(successes, failures)
-        result = successes[0]
+        consensus, result = build_consensus(successes, failures)
+        raw_forecasts = [copy.deepcopy(model_result.get("forecast")) for model_result in successes]
         apply_consensus_cap(result, consensus)
         if market_data:
             result["marketVerification"] = market_data.verification
         if market_research:
             result["marketResearch"] = market_research.metadata
+        result["risk"] = calculate_risk(
+            result.get("forecast", {}),
+            market_data.verification if market_data else None,
+        )
         try:
             forecast_ids = []
-            for model_result in successes:
-                forecast = model_result.get("forecast")
+            for model_result, forecast in zip(successes, raw_forecasts):
                 forecast_id = (
                     await asyncio.to_thread(
                         record_forecast,

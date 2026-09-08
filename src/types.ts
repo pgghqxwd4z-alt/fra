@@ -122,7 +122,26 @@ export interface ForecastResult {
 
   warnings: string[];
 
+  risk?: Risk;
   timestamp?: number;
+}
+
+export interface RiskTarget {
+  reward: number | null;
+  rr: number | null;
+}
+
+export interface Risk {
+  parsed: boolean;
+  entry?: number;
+  invalidation?: number;
+  risk?: number;
+  targets?: {
+    tp1?: RiskTarget;
+    tp2?: RiskTarget;
+    final?: RiskTarget;
+  };
+  warnings: string[];
 }
 
 export interface ConsensusModel {
@@ -137,12 +156,19 @@ export interface ConsensusModel {
 }
 
 export interface Consensus {
-  verdict: 'AGREE' | 'PARTIAL' | 'CONFLICT' | 'SINGLE';
+  verdict: 'AGREE' | 'PARTIAL' | 'CONFLICT' | 'SINGLE' | 'MAJORITY';
   models: ConsensusModel[];
   biasAgreement: boolean;
   directionAgreement: boolean;
   confidenceSpread: number;
   notes: string;
+  vote: {
+    bias: string | null;
+    direction: string | null;
+    support: number;
+    total: number;
+  };
+  selectedEngine: string | null;
   failures: {
     engine: string;
     error: string;

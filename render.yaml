@@ -13,8 +13,12 @@ services:
         value: gpt-4o
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
       - key: CLAUDE_MODEL
         value: claude-sonnet-5
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
@@ -24,7 +28,7 @@ services:
       - key: CONSENSUS_ENABLED
         value: "1"
       - key: CONSENSUS_ENGINES
-        value: openai,claude
+        value: openai,claude,gemini
       - key: APP_USERNAME
         value: user
       - key: APP_PASSWORD

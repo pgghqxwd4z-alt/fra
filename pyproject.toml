@@ -5,6 +5,7 @@ description = "QuantSage institutional trading analysis terminal backend"
 requires-python = ">=3.10,<3.13"
 dependencies = [
   "fastapi==0.115.12",
+  "google-genai==2.20.0",
   "httpx==0.28.1",
   "anthropic==1.2.0",
   "openai==1.78.1",

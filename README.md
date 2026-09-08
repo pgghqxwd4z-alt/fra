@@ -8,7 +8,7 @@ QuantSage is a React and FastAPI trading analysis terminal.
 - npm 10.8.2
 - Python 3.10+
 - uv
-- An OpenAI, Anthropic, or Groq API key for the selected provider
+- An OpenAI, Anthropic, Groq, or Gemini API key for the selected provider
 
 ## Setup
 
@@ -16,16 +16,19 @@ QuantSage is a React and FastAPI trading analysis terminal.
 cp .env.example .env
 ```
 
-Set `AI_PROVIDER` to `openai` (the default), `claude`, or `groq`, then provide the
+Set `AI_PROVIDER` to `openai` (the default), `claude`, `groq`, or `gemini`, then provide the
 corresponding API key in `.env`.
 
 For OpenAI, `OPENAI_MODEL` is optional. For Groq, `GROQ_MODEL` and
 `GROQ_VISION_MODEL` are optional and default to `groq/compound` and
 `qwen/qwen3.6-27b`.
-For Claude, `CLAUDE_MODEL` defaults to `claude-sonnet-5`. Set
-`CONSENSUS_ENABLED=1` and configure `CONSENSUS_ENGINES` to run the selected
-engines in parallel on the same chart. `AGREE` means all models share the same
-bias and entry direction; `PARTIAL` means they differ without an opposite
+For Claude, `CLAUDE_MODEL` defaults to `claude-sonnet-5`. For Gemini,
+`GEMINI_MODEL` defaults to `gemini-2.5-flash`. Set
+`CONSENSUS_ENABLED=1` and configure `CONSENSUS_ENGINES` (the default is
+`openai,claude,gemini`) to run the selected engines in parallel on the same
+chart. `AGREE` means all models share the same bias and entry direction;
+`MAJORITY` means more than half share a bias/direction pair and caps the
+selected forecast at 70; `PARTIAL` means they differ without an opposite
 bias/direction; `CONFLICT` means at least one opposite bias or direction;
 `SINGLE` means only one model was available. Agreement never inflates
 confidence; partial agreement caps it at 60 and conflict caps it at 45.
@@ -87,6 +90,9 @@ If TP1 and invalidation occur in the same M15 candle, the result is
 window is `expired`. Ambiguous and expired forecasts are excluded from the
 win-rate denominator. Allow weeks of live forecasts to accumulate before
 treating the hit rate as meaningful.
+The forecast panel also calculates deterministic risk and reward-to-risk values
+from parsed entry, invalidation, and target levels; nonnumeric levels are shown
+as unavailable rather than inferred.
 
 `FORECAST_HORIZON_HOURS` defaults to `48`. `FORECAST_DB_DURABLE=1` selects
 durable SQLite settings when the configured path is on persistent storage.
@@ -111,11 +117,11 @@ To deploy:
 
 1. Create a Render Blueprint from the repository. Render reads the root
    `render.yaml` and builds the declared Docker web service.
-2. Enter `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `APP_PASSWORD` when prompted
+2. Enter `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `APP_PASSWORD` when prompted
    or in the Render service environment. `GROQ_API_KEY` is also declared as a
    secret placeholder if `AI_PROVIDER=groq` is selected.
 3. Keep `AI_PROVIDER=openai` for the default OpenAI deployment, or select
-   `claude`/`groq` and provide its key. The Blueprint supplies defaults for the model,
+   `claude`/`groq`/`gemini` and provide its key. The Blueprint supplies defaults for the model,
    username, proxy trust, rate limits, Oanda practice mode, Twelve Data,
    Yahoo fallback, and market research. Enter `OANDA_API_TOKEN` to prefer
    Oanda live market verification; otherwise provide `TWELVEDATA_API_KEY` for
