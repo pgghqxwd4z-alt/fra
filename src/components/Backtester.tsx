@@ -11,6 +11,7 @@ interface BacktesterProps {
 }
 
 interface BacktestResult {
+  initialEquity: number;
   winRate: number;
   profitFactor: number;
   totalTrades: number;
@@ -21,9 +22,28 @@ interface BacktestResult {
   expectancy: number;
   equityCurves: { trade: number; median: number; p10: number; p90: number; best: number; worst: number }[];
   finalEquities: number[];
+  source?: 'simulation' | 'imported';
 }
 
 const STORAGE_KEY = 'quantsage_backtest_results';
+const HISTORY_STORAGE_KEY = 'quantsage_backtest_history';
+
+interface SimulationParams {
+  winProb: number;
+  rewardRisk: number;
+  riskPerTrade: number;
+  sampleSize: number;
+  initialBalance: number;
+}
+
+interface SavedSimulation {
+  id: string;
+  strategyId: string;
+  strategyName: string;
+  timestamp: number;
+  result: BacktestResult;
+  params: SimulationParams;
+}
 
 function loadSavedResults(): Record<string, BacktestResult> {
   try {
@@ -40,14 +60,70 @@ function saveResult(strategyId: string, result: BacktestResult) {
   } catch { /* storage full or unavailable */ }
 }
 
+function loadHistory(): SavedSimulation[] {
+  try {
+    const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
+    const parsed = saved ? JSON.parse(saved) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(entry => {
+        if (!entry || typeof entry !== 'object') return false;
+        const candidate = entry as Record<string, unknown>;
+        const result = candidate.result;
+        const params = candidate.params;
+        const simulationParams = params as Record<string, unknown> | null;
+        return typeof candidate.id === 'string' &&
+          typeof candidate.strategyId === 'string' &&
+          typeof candidate.strategyName === 'string' &&
+          typeof candidate.timestamp === 'number' &&
+          result !== null &&
+          typeof result === 'object' &&
+          Array.isArray((result as Record<string, unknown>).equityCurves) &&
+          params !== null &&
+          typeof params === 'object' &&
+          typeof simulationParams?.winProb === 'number' &&
+          typeof simulationParams?.rewardRisk === 'number' &&
+          typeof simulationParams?.riskPerTrade === 'number' &&
+          typeof simulationParams?.sampleSize === 'number' &&
+          typeof simulationParams?.initialBalance === 'number';
+      })
+      : [];
+  } catch { return []; }
+}
+
+function saveHistory(strategyId: string, strategyHistory: SavedSimulation[]): SavedSimulation[] | null {
+  const otherStrategies = loadHistory().filter(entry => entry.strategyId !== strategyId);
+  const pendingHistory = [...strategyHistory.slice(0, 20), ...otherStrategies];
+
+  while (pendingHistory.length > 0) {
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(pendingHistory));
+      return pendingHistory;
+    } catch {
+      const oldestIndex = pendingHistory.reduce(
+        (oldest, entry, index) => entry.timestamp < pendingHistory[oldest].timestamp ? index : oldest,
+        0
+      );
+      pendingHistory.splice(oldestIndex, 1);
+    }
+  }
+
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, '[]');
+    return [];
+  } catch {
+    window.alert('Could not save backtest history. Your current history was not changed.');
+    return null;
+  }
+}
+
 function runMonteCarloSimulation(
   winProb: number,
   rewardRisk: number,
   riskPerTrade: number,
   sampleSize: number,
-  numSimulations: number = 1000
+  numSimulations: number = 1000,
+  startingEquity: number = 10000
 ): BacktestResult {
-  const startingEquity = 10000;
   const allCurves: number[][] = [];
   const finalEquities: number[] = [];
   let totalWins = 0;
@@ -107,6 +183,7 @@ function runMonteCarloSimulation(
   const sharpe = stdDev > 0 ? avgReturn / stdDev : 0;
 
   return {
+    initialEquity: startingEquity,
     winRate: winProb,
     profitFactor,
     totalTrades: sampleSize,
@@ -117,6 +194,122 @@ function runMonteCarloSimulation(
     expectancy,
     equityCurves,
     finalEquities: finalEquities.sort((a, b) => a - b),
+    source: 'simulation',
+  };
+}
+
+function parseTradePnlValues(text: string): number[] {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+
+  const delimiter = lines[0].includes('\t')
+    ? '\t'
+    : lines[0].includes(';')
+      ? ';'
+      : ',';
+  const tokenizeRow = (line: string): string[] => {
+    const values: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let index = 0; index < line.length; index++) {
+      const character = line[index];
+      if (character === '"') {
+        if (inQuotes && line[index + 1] === '"') {
+          current += '"';
+          index++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (character === delimiter && !inQuotes) {
+        values.push(current.trim());
+        current = '';
+      } else {
+        current += character;
+      }
+    }
+
+    values.push(current.trim());
+    return values;
+  };
+
+  const firstRow = tokenizeRow(lines[0]).map(value => value.toLowerCase());
+  const pnlColumn = firstRow.findIndex(value => /pnl|profit|return|result|gain|loss|amount/.test(value));
+  const startAt = pnlColumn >= 0 ? 1 : 0;
+  const column = pnlColumn >= 0 ? pnlColumn : 0;
+
+  const parseValue = (value: string): number | null => {
+    const normalized = value.trim().replace(/[$€£,\s]/g, '');
+    if (normalized.endsWith('%')) return null;
+    if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  if (lines.slice(startAt).some(line => tokenizeRow(line)[column]?.trim().endsWith('%'))) {
+    return [];
+  }
+
+  return lines.slice(startAt).reduce<number[]>((values, line) => {
+    const parts = tokenizeRow(line);
+    const selected = parseValue(parts[column] ?? '');
+    if (selected !== null) values.push(selected);
+    return values;
+  }, []);
+}
+
+function createImportedResult(values: number[], startingEquity: number): BacktestResult {
+  let equity = startingEquity;
+  let peak = startingEquity;
+  let maxDrawdown = 0;
+  let totalWins = 0;
+  let totalWinAmount = 0;
+  let totalLosses = 0;
+  let totalLossAmount = 0;
+  const allCurves: number[][] = [[startingEquity]];
+
+  values.forEach(value => {
+    equity += value;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.max(maxDrawdown, ((peak - equity) / peak) * 100);
+    if (value > 0) {
+      totalWins++;
+      totalWinAmount += value;
+    } else if (value < 0) {
+      totalLosses++;
+      totalLossAmount += Math.abs(value);
+    }
+    allCurves[0].push(Math.max(0, equity));
+  });
+
+  const avgPnl = values.length > 0
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
+  const variance = values.length > 0
+    ? values.reduce((sum, value) => sum + Math.pow(value - avgPnl, 2), 0) / values.length
+    : 0;
+  const stdDev = Math.sqrt(variance);
+
+  return {
+    initialEquity: startingEquity,
+    winRate: values.length > 0 ? (totalWins / values.length) * 100 : 0,
+    profitFactor: totalLossAmount > 0 ? totalWinAmount / totalLossAmount : totalWinAmount > 0 ? 99 : 0,
+    totalTrades: values.length,
+    avgWin: totalWins > 0 ? totalWinAmount / totalWins : 0,
+    avgLoss: totalLosses > 0 ? -(totalLossAmount / totalLosses) : 0,
+    maxDrawdown: -maxDrawdown,
+    sharpeRatio: stdDev > 0 ? avgPnl / stdDev : 0,
+    expectancy: avgPnl,
+    equityCurves: allCurves[0].map((value, trade) => ({
+      trade,
+      median: value,
+      p10: value,
+      p90: value,
+      best: value,
+      worst: value,
+    })),
+    finalEquities: [Math.max(0, equity)],
+    source: 'imported',
   };
 }
 
@@ -133,21 +326,95 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
   const [rewardRisk, setRewardRisk] = useState(2.0);
   const [riskPerTrade, setRiskPerTrade] = useState(1.0);
   const [sampleSize, setSampleSize] = useState(200);
+  const [initialBalance, setInitialBalance] = useState(10000);
+  const [history, setHistory] = useState<SavedSimulation[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [isImported, setIsImported] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const saved = loadSavedResults();
-    setResult(saved[strategy.id] || null);
+    const savedResult = saved[strategy.id];
+    setResult(savedResult ? { ...savedResult, initialEquity: savedResult.initialEquity ?? 10000 } : null);
+    if (savedResult?.initialEquity) setInitialBalance(savedResult.initialEquity);
+  }, [strategy.id]);
+
+  useEffect(() => {
+    setHistory(loadHistory().filter(entry => entry.strategyId === strategy.id));
   }, [strategy.id]);
 
   const runBacktest = useCallback(() => {
     setRunning(true);
     setTimeout(() => {
-      const res = runMonteCarloSimulation(winProb, rewardRisk, riskPerTrade, sampleSize, 1000);
+      const res = runMonteCarloSimulation(winProb, rewardRisk, riskPerTrade, sampleSize, 1000, initialBalance);
       setResult(res);
+      setIsImported(false);
+      setShowHistory(false);
       saveResult(strategy.id, res);
       setRunning(false);
     }, 100);
-  }, [winProb, rewardRisk, riskPerTrade, sampleSize, strategy.id]);
+  }, [winProb, rewardRisk, riskPerTrade, sampleSize, initialBalance, strategy.id]);
+
+  const handleCSVImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setRunning(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const values = parseTradePnlValues(String(reader.result ?? ''));
+      if (values.length === 0) {
+        window.alert('Could not parse valid numerical trade data.');
+      } else {
+        setResult(createImportedResult(values, initialBalance));
+        setIsImported(true);
+        setShowHistory(false);
+      }
+      setRunning(false);
+      event.target.value = '';
+    };
+    reader.onerror = () => {
+      window.alert('CSV parse failure.');
+      setRunning(false);
+      event.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const saveCurrentToHistory = () => {
+    if (!result) return;
+    const entry: SavedSimulation = {
+      id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+      strategyId: strategy.id,
+      strategyName: isImported ? `${strategy.name} (Imported)` : strategy.name,
+      timestamp: Date.now(),
+      result,
+      params: { winProb, rewardRisk, riskPerTrade, sampleSize, initialBalance },
+    };
+    const updatedHistory = [entry, ...history].slice(0, 20);
+    const persistedHistory = saveHistory(strategy.id, updatedHistory);
+    if (persistedHistory) {
+      setHistory(persistedHistory.filter(item => item.strategyId === strategy.id));
+    }
+  };
+
+  const loadFromHistory = (entry: SavedSimulation) => {
+    setResult(entry.result);
+    setIsImported(entry.result.source === 'imported');
+    setWinProb(entry.params.winProb);
+    setRewardRisk(entry.params.rewardRisk);
+    setRiskPerTrade(entry.params.riskPerTrade);
+    setSampleSize(entry.params.sampleSize);
+    setInitialBalance(entry.params.initialBalance);
+    setShowHistory(false);
+  };
+
+  const deleteFromHistory = (id: string) => {
+    const updatedHistory = history.filter(entry => entry.id !== id);
+    const persistedHistory = saveHistory(strategy.id, updatedHistory);
+    if (persistedHistory) {
+      setHistory(persistedHistory.filter(item => item.strategyId === strategy.id));
+    }
+  };
 
   return (
     <div className="glass-panel rounded-[2rem] p-6 border border-emerald-500/20 bg-emerald-500/[0.02]">
@@ -158,19 +425,39 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
             Monte Carlo Simulation Engine — 1,000 Probabilistic Paths
           </p>
         </div>
-        <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-xl transition-colors text-slate-500 hover:text-white">
-          <i className="fa-solid fa-xmark text-lg"></i>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-2 text-[9px] font-bold text-slate-400 hover:text-emerald-400 uppercase tracking-widest border border-white/10 rounded-xl transition-colors"
+          >
+            <i className="fa-solid fa-file-import mr-2"></i>Import CSV
+          </button>
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleCSVImport} className="hidden" />
+          <button
+            onClick={() => setShowHistory(value => !value)}
+            className={`px-3 py-2 text-[9px] font-bold uppercase tracking-widest border rounded-xl transition-colors ${
+              showHistory ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' : 'border-white/10 text-slate-400 hover:text-emerald-400'
+            }`}
+          >
+            <i className="fa-solid fa-clock-rotate-left mr-2"></i>History ({history.length})
+          </button>
+          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-xl transition-colors text-slate-500 hover:text-white">
+            <i className="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <ParamSlider label="Win Probability" value={winProb} min={30} max={85} step={1} unit="%" onChange={setWinProb} />
-        <ParamSlider label="Reward:Risk" value={rewardRisk} min={0.5} max={5} step={0.1} unit="R" onChange={setRewardRisk} />
-        <ParamSlider label="Risk/Trade" value={riskPerTrade} min={0.25} max={5} step={0.25} unit="%" onChange={setRiskPerTrade} />
-        <ParamSlider label="Sample Size" value={sampleSize} min={50} max={500} step={10} unit=" trades" onChange={setSampleSize} />
-      </div>
+      {!showHistory && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+          <ParamSlider label="Win Probability" value={winProb} min={30} max={85} step={1} unit="%" onChange={setWinProb} />
+          <ParamSlider label="Reward:Risk" value={rewardRisk} min={0.5} max={5} step={0.1} unit="R" onChange={setRewardRisk} />
+          <ParamSlider label="Risk/Trade" value={riskPerTrade} min={0.25} max={5} step={0.25} unit="%" onChange={setRiskPerTrade} />
+          <ParamSlider label="Sample Size" value={sampleSize} min={50} max={500} step={10} unit=" trades" onChange={setSampleSize} />
+          <ParamSlider label="Initial Balance" value={initialBalance} min={1000} max={100000} step={500} unit="" onChange={setInitialBalance} formatValue={value => fmtCur(value)} />
+        </div>
+      )}
 
-      <div className="mb-6">
+      {!showHistory && <div className="mb-6">
         <button onClick={runBacktest} disabled={running}
           className="w-full px-8 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 text-slate-950 font-bold rounded-xl text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-3">
           {running ? (<><i className="fa-solid fa-circle-notch fa-spin"></i>Running 1,000 Simulations...</>)
@@ -181,15 +468,38 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
             Crunching 1,000 probabilistic equity paths...
           </p>
         )}
-      </div>
+      </div>}
 
-      {result && (
+      {showHistory && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
+          {history.length === 0 ? (
+            <p className="col-span-full py-12 text-center text-xs text-white/30 font-mono uppercase tracking-widest">No saved simulations yet.</p>
+          ) : history.map(entry => (
+            <div key={entry.id} className="relative rounded-xl border border-white/5 bg-black/20 p-4 hover:border-emerald-500/30 transition-colors">
+              <button onClick={() => deleteFromHistory(entry.id)} className="absolute right-3 top-3 text-slate-600 hover:text-rose-400">
+                <i className="fa-solid fa-trash-can text-[10px]"></i>
+              </button>
+              <button onClick={() => loadFromHistory(entry)} className="w-full text-left pr-5">
+                <p className="text-xs font-bold text-white truncate">{entry.strategyName}</p>
+                <p className="text-[9px] text-white/30 font-mono uppercase tracking-widest mt-1">
+                  {new Date(entry.timestamp).toLocaleString()}
+                </p>
+                <p className={`text-sm font-mono mt-3 ${entry.result.expectancy >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {entry.result.totalTrades} trades · {entry.result.winRate.toFixed(1)}% win rate
+                </p>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result && !showHistory && (
         <>
           <div className="mb-6 bg-black/30 rounded-xl p-4 border border-white/5">
             <div className="flex items-center gap-2 mb-3">
               <i className="fa-solid fa-chart-area text-emerald-500 text-[10px]"></i>
               <h4 className="text-[9px] font-bold text-white/60 uppercase tracking-widest">
-                Probabilistic Equity Curve — 1,000 Simulations
+                {result.source === 'imported' ? 'Imported Trade-List Equity Curve' : 'Probabilistic Equity Curve — 1,000 Simulations'}
               </h4>
             </div>
             <ResponsiveContainer width="100%" height={260}>
@@ -214,7 +524,7 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
                 <Tooltip contentStyle={{ background: 'rgba(0,0,0,0.9)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: '12px', fontSize: '10px', fontFamily: 'JetBrains Mono, monospace', color: 'white' }}
                   formatter={(value: number, name: string) => [fmtCur(value), name]}
                   labelFormatter={(label) => 'Trade #' + label}/>
-                <ReferenceLine y={10000} stroke="rgba(255,255,255,0.1)" strokeDasharray="5 5"/>
+                <ReferenceLine y={result.initialEquity} stroke="rgba(255,255,255,0.1)" strokeDasharray="5 5"/>
                 <Area type="monotone" dataKey="best" stroke="none" fill="url(#gP90)" name="99th %ile"/>
                 <Area type="monotone" dataKey="p90" stroke="rgba(16,185,129,0.2)" strokeWidth={1} fill="url(#gP90)" name="90th %ile" strokeDasharray="4 4"/>
                 <Area type="monotone" dataKey="median" stroke="#10b981" strokeWidth={2} fill="url(#gMed)" name="Median"/>
@@ -243,7 +553,9 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
           <div className="bg-black/20 rounded-xl p-3 border border-white/5">
             <div className="flex items-center gap-2 mb-2">
               <i className="fa-solid fa-chart-bar text-emerald-500 text-[10px]"></i>
-              <h4 className="text-[9px] font-bold text-white/60 uppercase tracking-widest">Final Equity Distribution (1,000 paths)</h4>
+              <h4 className="text-[9px] font-bold text-white/60 uppercase tracking-widest">
+                {result.source === 'imported' ? 'Final Equity' : 'Final Equity Distribution (1,000 paths)'}
+              </h4>
             </div>
             <div className="grid grid-cols-5 gap-2 text-center">
               <DistStat label="Worst 1%" value={fmtCur(result.finalEquities[Math.floor(result.finalEquities.length * 0.01)])} color="text-rose-400"/>
@@ -253,17 +565,40 @@ const Backtester: React.FC<BacktesterProps> = ({ strategy, onClose }) => {
               <DistStat label="Best 1%" value={fmtCur(result.finalEquities[Math.floor(result.finalEquities.length * 0.99)])} color="text-emerald-200"/>
             </div>
           </div>
+          <div className="flex justify-center gap-3 mt-4">
+            <button
+              onClick={() => { setResult(null); setIsImported(false); }}
+              className="px-4 py-2 text-[9px] font-bold text-slate-500 hover:text-white uppercase tracking-widest border border-white/10 rounded-xl transition-colors"
+            >
+              New Configuration
+            </button>
+            <button
+              onClick={saveCurrentToHistory}
+              className="px-4 py-2 text-[9px] font-bold text-emerald-400 hover:text-emerald-300 uppercase tracking-widest border border-emerald-500/20 rounded-xl transition-colors"
+            >
+              Save to History
+            </button>
+          </div>
         </>
       )}
     </div>
   );
 };
 
-const ParamSlider: React.FC<{ label: string; value: number; min: number; max: number; step: number; unit: string; onChange: (v: number) => void }> = ({ label, value, min, max, step, unit, onChange }) => (
+const ParamSlider: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit: string;
+  onChange: (v: number) => void;
+  formatValue?: (value: number) => string;
+}> = ({ label, value, min, max, step, unit, onChange, formatValue }) => (
   <div className="bg-black/30 rounded-xl p-3 border border-white/5">
     <div className="flex items-center justify-between mb-2">
       <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest">{label}</span>
-      <span className="text-[11px] font-bold text-emerald-400 font-mono">{value}{unit}</span>
+      <span className="text-[11px] font-bold text-emerald-400 font-mono">{formatValue ? formatValue(value) : `${value}${unit}`}</span>
     </div>
     <input type="range" min={min} max={max} step={step} value={value}
       onChange={(e) => onChange(parseFloat(e.target.value))}

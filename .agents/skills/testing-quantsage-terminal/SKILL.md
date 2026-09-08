@@ -5,6 +5,17 @@ description: How to run and end-to-end test the QuantSage institutional forecast
 
 # Testing the QuantSage terminal
 
+## Which codebase you are testing
+
+This describes the OpenAI-provider Express build. Those commits (`add0ea8` Gemini
+removal, `8b83ce9` chat/confidence fixes, `39dd0af` shell scrolling) are not on
+`main` — they arrive with the provider-port PRs. On plain `main`, expect the
+Gemini-era behaviour instead: `GEMINI_API_KEY` in place of `OPENAI_API_KEY`, no
+scrollable app shell (`App.tsx` is `overflow-hidden` throughout, so tabs taller
+than the viewport are unreachable), and a mobile sidebar with no backdrop and no
+close button. A later branch replaces the Express server with FastAPI and serves
+the built client from it.
+
 ## Running the app
 
 ```bash

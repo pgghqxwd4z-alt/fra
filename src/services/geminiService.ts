@@ -1,5 +1,25 @@
+import type { ForecastResult } from '../types';
+
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODELS = {
+  vision: import.meta.env.VITE_GROQ_VISION_MODEL || 'qwen/qwen3.6-27b',
+  text: import.meta.env.VITE_GROQ_TEXT_MODEL || 'openai/gpt-oss-120b',
+  fast: import.meta.env.VITE_GROQ_FAST_MODEL || 'openai/gpt-oss-20b',
+} as const;
+const GROQ_TPM_LIMIT = readPositiveEnvNumber(import.meta.env.VITE_GROQ_TPM_LIMIT, 8000);
+const GROQ_TPM_SAFETY_MARGIN = 300;
+const GROQ_MAX_TOKENS_FLOOR = 800;
+const GROQ_MAX_TOKENS_CAP = 4096;
+const GROQ_HEALTHCHECK_MAX_TOKENS = 64;
+const GROQ_FORCE_FULL_PIPELINE = import.meta.env.VITE_GROQ_FORCE_FULL_PIPELINE === 'true';
+const GROQ_LOW_CAPACITY_MODE = GROQ_TPM_LIMIT <= 10000 && !GROQ_FORCE_FULL_PIPELINE;
+const groqTokenReservations: { timestamp: number; reservedTokens: number }[] = [];
+
+function readPositiveEnvNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 const SYSTEM_PROMPT = `You are QuantSage Pro, an elite institutional trading advisor.
 Your knowledge base is strictly derived from:
@@ -9,6 +29,209 @@ Your knowledge base is strictly derived from:
 4. Smart Money Concepts (SMC) - Focus on Order Blocks (OB) and Fair Value Gaps (FVG).
 5. Pure Price Action - Focus on clean chart mechanics.
 Provide detailed, institutional-grade analysis grounded in these frameworks.`;
+
+const FORECAST_SYSTEM_PROMPT = `You are QuantSage Pro, a forward-looking institutional market analysis engine.
+
+Your primary objective is NOT to explain what has already happened.
+
+Your primary objective is to determine:
+
+"WHAT IS THE MOST LIKELY NEXT PRICE MOVE FROM THE CURRENT MARKET STATE?"
+
+You must distinguish between:
+
+PAST:
+What has already happened.
+
+PRESENT:
+What price is doing now.
+
+FUTURE:
+What price is most likely to do next.
+
+Historical price action is evidence only.
+Do not spend most of the response describing historical candles.
+
+==================================================
+ANALYSIS PIPELINE
+==================================================
+
+STEP 1 — CURRENT STATE
+
+Determine:
+
+- Current market structure
+- Current price location
+- Higher-timeframe directional bias if visible
+- Swing highs
+- Swing lows
+- Buy-side liquidity
+- Sell-side liquidity
+- Order Blocks
+- Fair Value Gaps
+- Displacement
+- BOS
+- CHoCH
+- Premium / Discount
+- Support / Resistance
+
+STEP 2 — LIQUIDITY MAP
+
+Determine:
+
+- Which liquidity has already been taken
+- Which liquidity remains
+- Which liquidity pool is the most attractive next target
+- Whether price is likely to seek buy-side or sell-side liquidity
+
+Do NOT automatically assume the nearest liquidity is the target.
+
+STEP 3 — INSTITUTIONAL INTERPRETATION
+
+Infer probable market intent from observable price structure.
+
+Possible behaviors:
+
+- Liquidity sweep
+- Accumulation
+- Distribution
+- Continuation
+- Reversal
+- FVG mitigation
+- Order Block mitigation
+- Stop hunt
+- Displacement
+- Expansion
+
+Never claim access to private institutional orders.
+
+Use observable market structure only.
+
+STEP 4 — FORECAST
+
+This is the MOST IMPORTANT step.
+
+Predict the most likely NEXT price sequence.
+
+Think:
+
+CURRENT PRICE
+↓
+NEXT EVENT
+↓
+RETRACEMENT
+↓
+ENTRY ZONE
+↓
+DISPLACEMENT
+↓
+LIQUIDITY TARGET
+
+Choose ONE primary scenario.
+
+Do not give three equally weighted possibilities.
+
+STEP 5 — ENTRY
+
+Determine whether an actionable entry currently exists.
+
+Possible outputs:
+
+BUY
+SELL
+WAIT
+
+If confirmation has not occurred:
+
+WAIT.
+
+Never manufacture an entry.
+
+STEP 6 — INVALIDATION
+
+Determine exactly what price behavior would invalidate the primary thesis.
+
+The invalidation must be structural.
+
+STEP 7 — ALTERNATIVE
+
+Provide only ONE alternative scenario.
+
+==================================================
+FORECAST RULES
+==================================================
+
+Use forward-looking reasoning.
+
+Prefer:
+
+"Price is most likely to..."
+"The next event is likely to..."
+"The expected path is..."
+"If price reaches..."
+"The forecast becomes invalid if..."
+
+Avoid making the response primarily:
+
+"Price did..."
+"Price formed..."
+"This candle caused..."
+"The market already..."
+
+Do not pretend the future is known.
+
+This is a probabilistic forecast.
+
+==================================================
+SYNTHESIZED LENSES
+==================================================
+
+Apply the following institutional and psychological principles to keep the forecast structurally and psychologically sound:
+
+- Market Wizards (Schwager): defined edge, asymmetric risk/reward, defence before offence.
+- Trading in the Zone (Douglas): think in probabilities; the edge exists over a series of trades, never a single one.
+- The Disciplined Trader (Douglas): risk is defined before entry; the market is always right.
+- Goldman Sachs institutional strategy: read where capital is deployed and where liquidity is engineered, from observable structure only.
+- Smart Money Concepts: Order Blocks, Fair Value Gaps, liquidity sweeps, BOS/CHoCH.
+- Pure Price Action: raw swing structure, momentum, rejection, expansion.
+
+Never fabricate book quotations and never attribute unsupported claims to an author. Framework knowledge cannot override observable market evidence. If required confirmation is absent, return WAIT.
+
+==================================================
+CONFIDENCE
+==================================================
+
+Confidence must represent the strength of visible evidence.
+
+Do not give artificially high confidence.
+
+If the chart is ambiguous, lower confidence.
+
+If there is no valid setup:
+
+entry.direction = WAIT
+
+and include:
+
+"NO HIGH-PROBABILITY ENTRY — WAIT."
+
+==================================================
+FINAL PRIORITY
+==================================================
+
+The most important output is:
+
+NEXT MOVE
+
+The analysis should answer:
+1. Where is price now?
+2. What is most likely to happen next?
+3. What liquidity is likely to be targeted?
+4. Where could the retracement occur?
+5. Where is the potential entry?
+6. What is the target?
+7. What invalidates the forecast?
+`;
 
 interface ChatResponse {
   text: string;
@@ -37,6 +260,7 @@ export interface AnnotateResponse {
   image: string | null;
   analysis: string;
   annotations: ChartAnnotation[];
+  forecast?: ForecastResult;
 }
 
 interface HistoryEntry {
@@ -55,6 +279,97 @@ interface GroqContentPart {
   image_url?: {
     url: string;
   };
+}
+
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+interface ModelImageInfo extends ImageDimensions {
+  mimeType: string;
+}
+
+function estimateGroqPromptTokens(messages: GroqMessage[], imageDimensions?: ImageDimensions): number {
+  let textCharacters = 0;
+  let imageTokens = 0;
+
+  for (const message of messages) {
+    if (typeof message.content === 'string') {
+      textCharacters += message.content.length;
+      continue;
+    }
+
+    for (const part of message.content) {
+      if (part.type === 'text') {
+        textCharacters += part.text?.length || 0;
+      } else {
+        const width = imageDimensions?.width || 1024;
+        const height = imageDimensions?.height || 1024;
+        imageTokens += Math.min(4096, Math.max(256, Math.ceil((width * height) / 256)));
+      }
+    }
+  }
+
+  return Math.max(1, Math.ceil(textCharacters / 4) + imageTokens);
+}
+
+function getMaxTokensForPrompt(promptEstimate: number): number {
+  const available = GROQ_TPM_LIMIT - promptEstimate - GROQ_TPM_SAFETY_MARGIN;
+  if (available < GROQ_MAX_TOKENS_FLOOR) {
+    throw new Error(
+      `Groq request cannot fit within the ${GROQ_TPM_LIMIT}-token budget (estimated prompt: ${promptEstimate} tokens).`
+    );
+  }
+  return Math.min(GROQ_MAX_TOKENS_CAP, Math.max(GROQ_MAX_TOKENS_FLOOR, Math.floor(available)));
+}
+
+async function reserveGroqTokens(
+  promptEstimate: number,
+  maxTokens: number,
+  stage: string
+): Promise<{ timestamp: number; reservedTokens: number }> {
+  const reservedTokens = promptEstimate + maxTokens;
+  if (reservedTokens > GROQ_TPM_LIMIT) {
+    throw new Error(`Groq ${stage} request exceeds the ${GROQ_TPM_LIMIT}-token budget.`);
+  }
+
+  while (true) {
+    const now = Date.now();
+    while (groqTokenReservations.length > 0 && groqTokenReservations[0].timestamp <= now - 60000) {
+      groqTokenReservations.shift();
+    }
+
+    const reservedInWindow = groqTokenReservations.reduce((total, entry) => total + entry.reservedTokens, 0);
+    if (reservedInWindow + reservedTokens <= GROQ_TPM_LIMIT) {
+      const reservation = { timestamp: now, reservedTokens };
+      groqTokenReservations.push(reservation);
+      return reservation;
+    }
+
+    const oldestReservation = groqTokenReservations[0];
+    const waitMs = Math.max(250, oldestReservation.timestamp + 60000 - now);
+    console.log(
+      `[Orchestrator] Token budget queueing ${stage}: ${reservedInWindow}/${GROQ_TPM_LIMIT} reserved. Waiting ${Math.ceil(waitMs / 1000)}s.`
+    );
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+  }
+}
+
+function releaseGroqTokens(reservation: { timestamp: number; reservedTokens: number }): void {
+  const index = groqTokenReservations.indexOf(reservation);
+  if (index >= 0) groqTokenReservations.splice(index, 1);
+}
+
+function parseRetryDelayMs(response: Response, body: string): number {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(250, Math.ceil(seconds * 1000));
+  }
+
+  const match = body.match(/try again in\s+([\d.]+)\s*s/i);
+  return match ? Math.max(250, Math.ceil(Number(match[1]) * 1000)) : 3000;
 }
 
 // ===== External Data Search Functions =====
@@ -349,7 +664,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   if (pipelineHealth.rateLimitRemaining <= 2 && pipelineHealth.rateLimitReset > now) {
     const waitTime = pipelineHealth.rateLimitReset - now + 500;
     return {
-      shouldRunValidator: true,
+      shouldRunValidator: !GROQ_LOW_CAPACITY_MODE,
       shouldRunKnowledgeSearch: false, // Skip to save quota
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: waitTime,
@@ -360,11 +675,21 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
   // If degraded (high failure rate), run conservatively
   if (pipelineHealth.apiStatus === 'degraded' || pipelineHealth.consecutiveFailures >= 2) {
     return {
-      shouldRunValidator: pipelineHealth.consecutiveFailures < 3,
+      shouldRunValidator: !GROQ_LOW_CAPACITY_MODE && pipelineHealth.consecutiveFailures < 3,
       shouldRunKnowledgeSearch: false,
       shouldFetchMarketData: true,
       delayBeforeNextCallMs: 3000,
       reason: `API degraded (${pipelineHealth.consecutiveFailures} consecutive failures). Running conservatively.`
+    };
+  }
+
+  if (GROQ_LOW_CAPACITY_MODE) {
+    return {
+      shouldRunValidator: false,
+      shouldRunKnowledgeSearch: false,
+      shouldFetchMarketData: true,
+      delayBeforeNextCallMs: 0,
+      reason: `Low-capacity mode (${GROQ_TPM_LIMIT} TPM) — skipping optional validator and knowledge stages.`
     };
   }
 
@@ -385,7 +710,7 @@ function orchestratorDecide(lensIndex: number, totalLenses: number): PipelineDec
 }
 
 // Maintenance: update health metrics after each API call
-function orchestratorRecordCall(stage: string, durationMs: number, success: boolean, rateLimitHeaders?: { remaining?: string; reset?: string }) {
+function orchestratorRecordCall(stage: string, durationMs: number, success: boolean, rateLimitHeaders?: { remaining?: string; reset?: string }): void {
   pipelineHealth.totalCallsMade++;
   pipelineHealth.lastCallTimestamp = Date.now();
 
@@ -436,6 +761,9 @@ function orchestratorRecordCall(stage: string, durationMs: number, success: bool
 async function orchestratorHealthCheck(): Promise<boolean> {
   try {
     const start = Date.now();
+    const healthMessages: GroqMessage[] = [{ role: 'user', content: 'ping' }];
+    const promptEstimate = estimateGroqPromptTokens(healthMessages);
+    await reserveGroqTokens(promptEstimate, GROQ_HEALTHCHECK_MAX_TOKENS, 'healthcheck');
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
       headers: {
@@ -443,9 +771,10 @@ async function orchestratorHealthCheck(): Promise<boolean> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 5,
+        model: GROQ_MODELS.text,
+        messages: healthMessages,
+        max_tokens: GROQ_HEALTHCHECK_MAX_TOKENS,
+        ...getReasoningOptions(GROQ_MODELS.text),
       }),
     });
     const duration = Date.now() - start;
@@ -457,7 +786,7 @@ async function orchestratorHealthCheck(): Promise<boolean> {
     if (response.ok) {
       pipelineHealth.apiStatus = 'healthy';
       pipelineHealth.consecutiveFailures = 0;
-      console.log('[Orchestrator] Health check PASSED. API is healthy.');
+      console.log(`[Orchestrator] Health check PASSED. API is healthy with ${GROQ_TPM_LIMIT} TPM capacity.`);
       return true;
     }
     if (response.status === 429) {
@@ -474,11 +803,51 @@ async function orchestratorHealthCheck(): Promise<boolean> {
   }
 }
 
+function isReasoningModel(model: string): boolean {
+  return model.startsWith('qwen/') || model.startsWith('openai/gpt-oss-');
+}
+
+function getReasoningOptions(model: string): Record<string, string> {
+  if (!isReasoningModel(model)) return {};
+  return {
+    reasoning_format: 'hidden',
+    reasoning_effort: model.startsWith('qwen/') ? 'none' : 'low',
+  };
+}
+
+function stripLeadingThinkBlock(content: string): string {
+  return content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim();
+}
+
 // Enhanced callGroq with orchestrator monitoring
-async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-versatile', maxRetries: number = 3, stage: string = 'unknown'): Promise<string> {
+async function callGroq(
+  messages: GroqMessage[],
+  model: string = GROQ_MODELS.text,
+  maxRetries: number = 3,
+  stage: string = 'unknown',
+  imageDimensions?: ImageDimensions
+): Promise<string> {
+  const promptEstimate = estimateGroqPromptTokens(messages, imageDimensions);
+  let maxTokens: number;
+  try {
+    maxTokens = getMaxTokensForPrompt(promptEstimate);
+  } catch (error) {
+    const containsImage = messages.some(message =>
+      Array.isArray(message.content) && message.content.some(part => part.type === 'image_url')
+    );
+    if (containsImage) {
+      throw new Error(
+        `Chart image is too large for the Groq token budget after resizing (estimated prompt: ${promptEstimate} tokens). Please use a smaller chart image.`
+      );
+    }
+    throw error;
+  }
+  let oversizeRetryUsed = false;
+
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const start = Date.now();
     try {
+      const reservation = await reserveGroqTokens(promptEstimate, maxTokens, stage);
       // Add 90-second timeout to prevent hanging requests
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000);
@@ -492,7 +861,8 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
           model,
           messages,
           temperature: 0.7,
-          max_tokens: 8192,
+          max_tokens: maxTokens,
+          ...getReasoningOptions(model),
         }),
         signal: controller.signal,
       });
@@ -507,18 +877,42 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       if (response.status === 429) {
         pipelineHealth.totalRateLimitsHit++;
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        // Rate limited — wait and retry with exponential backoff
-        const retryAfter = parseInt(response.headers.get('retry-after') || '0') * 1000;
-        const backoff = retryAfter || Math.min(2000 * Math.pow(2, attempt), 15000);
+        const body = await response.text();
+        if (attempt === maxRetries - 1) {
+          throw new Error(`Groq API rate limited on ${stage}: ${body || 'retry limit reached'}`);
+        }
+        const backoff = parseRetryDelayMs(response, body);
         console.warn(`[Orchestrator] Rate limited on ${stage} (attempt ${attempt + 1}/${maxRetries}). Waiting ${backoff}ms...`);
         await new Promise(resolve => setTimeout(resolve, backoff));
         continue;
       }
 
+      if (response.status === 413) {
+        const body = await response.text();
+        orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
+        if (!oversizeRetryUsed && maxTokens > GROQ_MAX_TOKENS_FLOOR) {
+          releaseGroqTokens(reservation);
+          oversizeRetryUsed = true;
+          maxTokens = GROQ_MAX_TOKENS_FLOOR;
+          console.warn(`[Orchestrator] Request too large on ${stage}. Retrying once with max_tokens=${maxTokens}.`);
+          continue;
+        }
+        const error = new Error(`Groq request too large for ${stage}: ${body || 'payload exceeds model limits'}`) as Error & { nonRetryable?: boolean };
+        error.nonRetryable = true;
+        throw error;
+      }
+
       if (!response.ok) {
         orchestratorRecordCall(stage, Date.now() - start, false, rateLimitHeaders);
-        const error = await response.json();
-        throw new Error(error.error?.message || `Groq API error: ${response.status}`);
+        const body = await response.text();
+        let message = `Groq API error: ${response.status}`;
+        try {
+          const parsed = JSON.parse(body);
+          message = parsed.error?.message || message;
+        } catch {
+          if (body) message = body;
+        }
+        throw new Error(message);
       }
 
       const duration = Date.now() - start;
@@ -526,8 +920,11 @@ async function callGroq(messages: GroqMessage[], model: string = 'llama-3.3-70b-
       console.log(`[Orchestrator] ${stage} completed in ${duration}ms. API: ${pipelineHealth.apiStatus}, Remaining: ${pipelineHealth.rateLimitRemaining}`);
 
       const data = await response.json();
-      return data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
+      return stripLeadingThinkBlock(data.choices?.[0]?.message?.content || "I'm sorry, I couldn't generate a response.");
     } catch (err) {
+      if (typeof err === 'object' && err !== null && (err as { nonRetryable?: boolean }).nonRetryable) {
+        throw err;
+      }
       orchestratorRecordCall(stage, Date.now() - start, false);
       if (attempt === maxRetries - 1) throw err;
       // Network error — wait and retry with longer backoff
@@ -573,6 +970,160 @@ function parseAnnotations(text: string, lenses: string[]): ChartAnnotation[] {
   }
 
   return annotations;
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const stripped = stripLeadingThinkBlock(text);
+  const fenced = stripped.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] || stripped;
+  const start = fenced.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < fenced.length; index++) {
+    const character = fenced[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === '{') {
+      depth++;
+    } else if (character === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          const parsed: unknown = JSON.parse(fenced.slice(start, index + 1));
+          return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeForecast(text: string): ForecastResult | undefined {
+  const parsed = extractJsonObject(text);
+  if (!parsed) return undefined;
+
+  const objectValue = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  const textValue = (value: unknown, fallback: string): string =>
+    typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  const stringArray = (value: unknown): string[] =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim())
+      : [];
+  const booleanValue = (value: unknown, fallback: boolean): boolean =>
+    typeof value === 'boolean' ? value : fallback;
+  const confidenceValue = (value: unknown): number => {
+    const parsedConfidence = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+    return Number.isFinite(parsedConfidence) ? Math.round(Math.max(0, Math.min(100, parsedConfidence))) : 0;
+  };
+  const biasValue = (value: unknown): ForecastResult['bias'] =>
+    value === 'BULLISH' || value === 'BEARISH' || value === 'NEUTRAL' ? value : 'NEUTRAL';
+  const liquidityTypeValue = (value: unknown): ForecastResult['liquidityTarget']['type'] =>
+    value === 'BUY_SIDE' || value === 'SELL_SIDE' || value === 'UNKNOWN' ? value : 'UNKNOWN';
+  const directionValue = (value: unknown): ForecastResult['entry']['direction'] =>
+    value === 'BUY' || value === 'SELL' || value === 'WAIT' ? value : 'WAIT';
+
+  const liquidityTarget = objectValue(parsed.liquidityTarget);
+  const retracement = objectValue(parsed.retracement);
+  const entry = objectValue(parsed.entry);
+  const targets = objectValue(parsed.targets);
+
+  return {
+    currentState: textValue(parsed.currentState, 'Current state unavailable.'),
+    bias: biasValue(parsed.bias),
+    confidence: confidenceValue(parsed.confidence),
+    nextMove: textValue(parsed.nextMove, 'No reliable next move is available.'),
+    expectedPath: stringArray(parsed.expectedPath),
+    liquidityTarget: {
+      type: liquidityTypeValue(liquidityTarget.type),
+      level: textValue(liquidityTarget.level, 'Unknown'),
+      reason: textValue(liquidityTarget.reason, 'Liquidity target unavailable.'),
+    },
+    retracement: {
+      expected: booleanValue(retracement.expected, false),
+      zone: textValue(retracement.zone, 'Unknown'),
+      reason: textValue(retracement.reason, 'Retracement outlook unavailable.'),
+    },
+    entry: {
+      direction: directionValue(entry.direction),
+      zone: textValue(entry.zone, 'Wait for confirmation.'),
+      confirmation: textValue(entry.confirmation, 'Wait for structural confirmation.'),
+    },
+    targets: {
+      tp1: textValue(targets.tp1, 'Unknown'),
+      tp2: textValue(targets.tp2, 'Unknown'),
+      final: textValue(targets.final, 'Unknown'),
+    },
+    invalidation: textValue(parsed.invalidation, 'Structural invalidation unavailable.'),
+    primaryScenario: textValue(parsed.primaryScenario, 'No reliable primary scenario is available.'),
+    alternativeScenario: textValue(parsed.alternativeScenario, 'No reliable alternative scenario is available.'),
+    nextEvent: textValue(parsed.nextEvent, 'Awaiting confirmation.'),
+    structuralEvidence: stringArray(parsed.structuralEvidence),
+    warnings: stringArray(parsed.warnings),
+    timestamp: Date.now(),
+  };
+}
+
+function buildForecastMessages(prompt: string, analysisParts: string[]): GroqMessage[] {
+  const schemaInstruction = `Return ONLY one JSON object with exactly these keys and value types:
+{
+  "currentState": "string",
+  "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": 0,
+  "nextMove": "string",
+  "expectedPath": ["string"],
+  "liquidityTarget": { "type": "BUY_SIDE" | "SELL_SIDE" | "UNKNOWN", "level": "string", "reason": "string" },
+  "retracement": { "expected": true, "zone": "string", "reason": "string" },
+  "entry": { "direction": "BUY" | "SELL" | "WAIT", "zone": "string", "confirmation": "string" },
+  "targets": { "tp1": "string", "tp2": "string", "final": "string" },
+  "invalidation": "string",
+  "primaryScenario": "string",
+  "alternativeScenario": "string",
+  "nextEvent": "string",
+  "structuralEvidence": ["string"],
+  "warnings": ["string"]
+}
+All keys are required. Do not include markdown, code fences, commentary, or any other keys.`;
+  const messages: GroqMessage[] = [
+    { role: 'system', content: `${FORECAST_SYSTEM_PROMPT}\n\n${schemaInstruction}` },
+  ];
+  const evidence = analysisParts.map((part, index) => ({
+    label: `--- EVIDENCE ${index + 1} ---\n`,
+    text: part.slice(0, 2400),
+  }));
+  const historyPromptBudget = GROQ_TPM_LIMIT - GROQ_MAX_TOKENS_FLOOR - GROQ_TPM_SAFETY_MARGIN;
+  const buildUserContent = () =>
+    `USER DIRECTIVE:\n${prompt}\n\nUse the following lens and synthesis analysis as evidence. Prioritize the most recent structural information and forecast one primary path:\n\n${
+      evidence.map(item => `${item.label}${item.text}`).join('\n\n')
+    }`;
+
+  messages.push({ role: 'user', content: buildUserContent() });
+  while (estimateGroqPromptTokens(messages) > historyPromptBudget) {
+    const longest = evidence.reduce((best, item, index) =>
+      item.text.length > (evidence[best]?.text.length || 0) ? index : best, 0);
+    if (!evidence[longest] || evidence[longest].text.length <= 200) break;
+    evidence[longest].text = evidence[longest].text.slice(0, Math.max(200, evidence[longest].text.length - 400));
+    messages[1] = { role: 'user', content: buildUserContent() };
+  }
+  return messages;
 }
 
 function generateDefaultAnnotations(lenses: string[]): ChartAnnotation[] {
@@ -1087,6 +1638,10 @@ export const geminiService = {
       }
 
       messages.push({ role: 'user', content: prompt });
+      const historyPromptBudget = GROQ_TPM_LIMIT - GROQ_MAX_TOKENS_FLOOR - GROQ_TPM_SAFETY_MARGIN;
+      while (messages.length > 2 && estimateGroqPromptTokens(messages) > historyPromptBudget) {
+        messages.splice(1, 1);
+      }
 
       const text = await callGroq(messages);
 
@@ -1097,7 +1652,12 @@ export const geminiService = {
     }
   },
 
-  async annotateChart(base64Image: string, prompt: string, lenses: string[] = ['smc']): Promise<AnnotateResponse> {
+  async annotateChart(
+    base64Image: string,
+    prompt: string,
+    lenses: string[] = ['smc'],
+    imageInfo?: ModelImageInfo
+  ): Promise<AnnotateResponse> {
     try {
       // Build lens-specific system prompts — each lens is INDEPENDENT
       const lensPrompts: Record<string, { system: string; annotation: string }> = {
@@ -1692,7 +2252,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
               {
                 type: 'image_url',
                 image_url: {
-                  url: 'data:image/png;base64,' + base64Image
+                  url: `data:${imageInfo?.mimeType || 'image/png'};base64,${base64Image}`
                 }
               },
               {
@@ -1703,7 +2263,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
           }
         ];
 
-        const analysisText = await callGroq(messages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `primary-${lens}`);
+        const analysisText = await callGroq(messages, GROQ_MODELS.vision, 3, `primary-${lens}`, imageInfo);
         const primaryAnnotations = parseAnnotations(analysisText, [lens]);
 
         // ===== STAGE 2: AI Validator (Orchestrator-controlled) =====
@@ -1749,7 +2309,7 @@ MINIMUM 10 annotations. ALL must use lens "isyn". Include price levels in every 
                       content: knowledgeSearchPrompt
                     }
                   ];
-                  return await callGroq(knowledgeMessages, 'llama-3.3-70b-versatile', 2, `knowledge-${lens}`);
+                  return await callGroq(knowledgeMessages, GROQ_MODELS.text, 2, `knowledge-${lens}`);
                 } catch {
                   return 'Knowledge search unavailable.';
                 }
@@ -1817,7 +2377,7 @@ IMPORTANT:
                   {
                     type: 'image_url',
                     image_url: {
-                      url: 'data:image/png;base64,' + base64Image
+                      url: `data:${imageInfo?.mimeType || 'image/png'};base64,${base64Image}`
                     }
                   },
                   {
@@ -1828,7 +2388,7 @@ IMPORTANT:
               }
             ];
 
-            const validatedText = await callGroq(validatorMessages, 'meta-llama/llama-4-scout-17b-16e-instruct', 3, `validator-${lens}`);
+            const validatedText = await callGroq(validatorMessages, GROQ_MODELS.vision, 3, `validator-${lens}`, imageInfo);
             const validatedAnnotations = parseAnnotations(validatedText, [lens]);
 
             // Use validated annotations if the validator produced them, otherwise fall back to primary
@@ -1848,7 +2408,7 @@ IMPORTANT:
         }
 
         // Remove all JSON blocks (fenced and inline), annotation headers, stray JSON objects, and orphan "Annotation:" lines
-        let cleanAnalysis = analysisSource
+        const cleanAnalysis = analysisSource
           .replace(/```json[\s\S]*?```/g, '')
           .replace(/```[\s\S]*?```/g, '')
           .replace(/\*?\*?JSON Annotation Block:?\*?\*?:?/gi, '')
@@ -1866,12 +2426,15 @@ IMPORTANT:
           // Individual lens failed — try text-only fallback API before giving up
           const errorMsg = lensError instanceof Error ? lensError.message : String(lensError);
           const isRateLimit = errorMsg.includes('429') || errorMsg.includes('rate') || errorMsg.includes('Rate');
+          if (errorMsg.includes('Chart image is too large')) {
+            throw lensError;
+          }
           console.warn(`[Orchestrator] Lens "${lens}" primary pipeline FAILED: ${errorMsg}. Attempting text-only fallback API...`);
 
           // ===== FALLBACK API: Text-only analysis (no image = smaller payload, faster, more reliable) =====
           if (!isRateLimit) {
             try {
-              console.log(`[Orchestrator] Fallback API for "${lens}": Using fast llama-3.1-8b-instant (text-only)...`);
+              console.log(`[Orchestrator] Fallback API for "${lens}": Using fast ${GROQ_MODELS.fast} (text-only)...`);
               await new Promise(resolve => setTimeout(resolve, 5000)); // 5s cooldown to let API recover
 
               const fallbackMessages: GroqMessage[] = [
@@ -1908,7 +2471,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
                 }
               ];
 
-              const fallbackText = await callGroq(fallbackMessages, 'llama-3.1-8b-instant', 3, `fallback-${lens}`);
+              const fallbackText = await callGroq(fallbackMessages, GROQ_MODELS.fast, 3, `fallback-${lens}`);
               const fallbackAnnotations = parseAnnotations(fallbackText, [lens]);
 
               if (fallbackAnnotations.length === 0) {
@@ -1918,7 +2481,7 @@ Also provide a JSON annotation block with general-purpose educational annotation
               }
 
               // Clean the fallback analysis text
-              let cleanFallback = fallbackText
+              const cleanFallback = fallbackText
                 .replace(/```json[\s\S]*?```/g, '')
                 .replace(/```[\s\S]*?```/g, '')
                 .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -2082,7 +2645,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
             }
           ];
 
-          const synthesisText = await callGroq(synthesisMessages, 'llama-3.3-70b-versatile', 2, 'synthesis-entry');
+          const synthesisText = await callGroq(synthesisMessages, GROQ_MODELS.text, 2, 'synthesis-entry');
           const synthesisAnnotations = parseAnnotations(synthesisText, lenses);
 
           if (synthesisAnnotations.length > 0) {
@@ -2090,7 +2653,7 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
           }
 
           // Clean the synthesis text
-          let cleanSynthesis = synthesisText
+          const cleanSynthesis = synthesisText
             .replace(/```json[\s\S]*?```/g, '')
             .replace(/```[\s\S]*?```/g, '')
             .replace(/\[[\s\S]*?\{[\s\S]*?"type"[\s\S]*?\}[\s\S]*?\]/g, '')
@@ -2113,13 +2676,36 @@ Now synthesize ALL of the above into your Probabilistic Entry Analysis. Identify
         console.log(`[Orchestrator] Skipping Probabilistic Entry Analysis — need 2+ lens analyses (have ${allAnalysisParts.length}).`);
       }
 
+      // ===== STAGE 5: STRUCTURED FORECAST EXTRACTION =====
+      // The forecast is the headline output and remains enabled in low-capacity mode.
+      let forecast: ForecastResult | undefined;
+      try {
+        const forecastDecision = orchestratorDecide(lenses.length, lenses.length);
+        console.log(`[Orchestrator] Forecast stage: ${forecastDecision.reason}`);
+        if (forecastDecision.delayBeforeNextCallMs > 0) {
+          console.log(`[Orchestrator] Waiting ${forecastDecision.delayBeforeNextCallMs}ms before forecast stage...`);
+          await new Promise(resolve => setTimeout(resolve, forecastDecision.delayBeforeNextCallMs));
+        }
+
+        const forecastMessages = buildForecastMessages(prompt, allAnalysisParts);
+        const forecastText = await callGroq(forecastMessages, GROQ_MODELS.text, 2, 'forecast');
+        forecast = normalizeForecast(forecastText);
+        if (!forecast) {
+          console.warn('[Orchestrator] Forecast stage returned no parseable JSON (non-critical).');
+        } else {
+          console.log('[Orchestrator] Forecast stage COMPLETE.');
+        }
+      } catch (forecastError) {
+        console.warn('[Orchestrator] Forecast stage failed (non-critical):', forecastError);
+      }
+
       // ===== ORCHESTRATOR: Post-pipeline health summary =====
       console.log(`[Orchestrator] Pipeline complete. Status: ${pipelineHealth.apiStatus} | Calls: ${pipelineHealth.totalCallsMade} | Failed: ${pipelineHealth.totalCallsFailed} | Rate limits hit: ${pipelineHealth.totalRateLimitsHit} | Avg response: ${Math.round(pipelineHealth.avgResponseTimeMs)}ms`);
 
       // Combine all independent analyses with clear separators
       const combinedAnalysis = allAnalysisParts.join('\n\n---\n\n');
 
-      return { image: null, analysis: combinedAnalysis, annotations: allAnnotations };
+      return { image: null, analysis: combinedAnalysis, annotations: allAnnotations, forecast };
     } catch (error) {
       console.error("Annotation Error:", error);
       throw error;
