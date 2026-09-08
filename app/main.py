@@ -389,6 +389,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
         )
         try:
             forecast_ids = []
+            forecast_ids_by_engine: dict[str, str | None] = {}
             for model_result, forecast in zip(successes, raw_forecasts):
                 forecast_id = (
                     await asyncio.to_thread(
@@ -403,8 +404,13 @@ async def annotate(payload: dict[str, Any]) -> Any:
                     else None
                 )
                 forecast_ids.append(forecast_id)
-            if forecast_ids and forecast_ids[0]:
-                result["forecastId"] = forecast_ids[0]
+                engine = model_result.get("engine")
+                if isinstance(engine, str):
+                    forecast_ids_by_engine[engine] = forecast_id
+            selected_engine = consensus.get("selectedEngine")
+            selected_forecast_id = forecast_ids_by_engine.get(selected_engine)
+            if selected_forecast_id:
+                result["forecastId"] = selected_forecast_id
         except Exception as error:
             logger.warning("Forecast logging failed: %s", error)
         return result

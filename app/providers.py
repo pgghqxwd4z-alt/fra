@@ -188,6 +188,33 @@ def normalize_forecast(value: Any) -> dict[str, Any]:
     }
 
 
+_GEMINI_SCHEMA_KEYS = {"type", "properties", "required", "items", "enum", "description", "nullable"}
+
+
+def _to_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    converted: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key not in _GEMINI_SCHEMA_KEYS:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            converted[key] = {
+                property_name: _to_gemini_schema(property_schema)
+                for property_name, property_schema in value.items()
+                if isinstance(property_schema, dict)
+            }
+        elif key == "items" and isinstance(value, dict):
+            converted[key] = _to_gemini_schema(value)
+        else:
+            converted[key] = value
+    return converted
+
+
+def require_forecast_confidence(forecast: dict[str, Any], engine: str) -> None:
+    confidence = forecast.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
+        raise RuntimeError(f"{engine} omitted confidence")
+
+
 def parse_json_object(text: str) -> dict[str, Any]:
     try:
         result = json.loads(text)
@@ -412,7 +439,7 @@ class AIProvider:
                     contents=contents,
                     config=gemini_types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        response_schema=schema,
+                        response_schema=_to_gemini_schema(schema),
                         tools=tools,
                     ),
                 )
@@ -433,6 +460,15 @@ class AIProvider:
         )
         return response
 
+    async def _gemini_search(self, client: genai.Client, prompt: str) -> Any:
+        chat = client.aio.chats.create(
+            model=self.gemini_model,
+            config=gemini_types.GenerateContentConfig(
+                tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
+            ),
+        )
+        return await chat.send_message(f"Use Google Search now.\n\n{prompt}")
+
     async def retrieve_knowledge(
         self,
         prompt: str,
@@ -446,13 +482,7 @@ class AIProvider:
         retrieval_prompt = build_retrieval_prompt(prompt, market_context, source_text)
         if engine_name == "gemini":
             client = self._require_gemini()
-            search = await client.aio.models.generate_content(
-                model=self.gemini_model,
-                contents=retrieval_prompt,
-                config=gemini_types.GenerateContentConfig(
-                    tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
-                ),
-            )
+            search = await self._gemini_search(client, retrieval_prompt)
             source_material = search.text or "No web search material was returned."
             result = await self._gemini_json(
                 client,
@@ -667,12 +697,9 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
         research_prompt = build_research_prompt(label)
         if engine_name == "gemini":
             client = self._require_gemini()
-            search = await client.aio.models.generate_content(
-                model=self.gemini_model,
-                contents=research_prompt,
-                config=gemini_types.GenerateContentConfig(
-                    tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
-                ),
+            search = await self._gemini_search(
+                client,
+                f"Search current {label} market headlines from the last 48 hours and upcoming events. Include current sources.",
             )
             source_material = search.text or "No web search material was returned."
             result = await self._gemini_json(
@@ -787,7 +814,9 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             text = result.text or ""
             if not text:
                 raise RuntimeError("No response text from model")
-            forecast = normalize_forecast(parse_json_object(text))
+            raw_forecast = parse_json_object(text)
+            require_forecast_confidence(raw_forecast, engine_name)
+            forecast = normalize_forecast(raw_forecast)
             model = self.gemini_model
         elif engine_name == "claude":
             client = self._require_claude()
@@ -804,6 +833,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             if not text:
                 raise RuntimeError("No response text from model")
             forecast = parse_json_object(text)
+            require_forecast_confidence(forecast, engine_name)
             forecast["confidence"] = normalize_forecast(forecast)["confidence"]
             model = self.claude_model
         elif engine_name == "groq":
@@ -824,7 +854,9 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             text = result.choices[0].message.content
             if not text:
                 raise RuntimeError("No response text from model")
-            forecast = normalize_forecast(parse_json_object(text))
+            raw_forecast = parse_json_object(text)
+            require_forecast_confidence(raw_forecast, engine_name)
+            forecast = normalize_forecast(raw_forecast)
             model = self.groq_vision_model
         else:
             client = self._require_openai(engine_name)
@@ -844,6 +876,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             if not result.output_text:
                 raise RuntimeError("No response text from model")
             forecast = json.loads(result.output_text)
+            require_forecast_confidence(forecast, engine_name)
             forecast["confidence"] = normalize_forecast(forecast)["confidence"]
             model = self.openai_model
         return {
@@ -858,30 +891,27 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
         engine_name = engine or self.name
         if engine_name == "gemini":
             client = self._require_gemini()
-            contents = []
+            history_contents = []
             for entry in history or []:
-                contents.append(
+                history_contents.append(
                     {
                         "role": "model" if entry.get("role") in {"model", "assistant"} else "user",
                         "parts": [{"text": (entry.get("parts") or [{}])[0].get("text") or entry.get("text") or ""}],
                     }
                 )
-            contents.append({"role": "user", "parts": [{"text": prompt}]})
-            search = await client.aio.models.generate_content(
+            chat = client.aio.chats.create(
                 model=self.gemini_model,
-                contents=contents,
                 config=gemini_types.GenerateContentConfig(
                     system_instruction=FORECAST_SYSTEM_PROMPT,
                     tools=[gemini_types.Tool(google_search=gemini_types.GoogleSearch())],
                 ),
+                history=history_contents,
             )
-            material = search.text or "Search grounding was unavailable; answer from the supplied context."
-            answer = await client.aio.models.generate_content(
-                model=self.gemini_model,
-                contents=contents + [{"role": "user", "parts": [{"text": f"WEB SEARCH MATERIAL:\n{material}\n\nAnswer the user's request now."}]}],
-                config=gemini_types.GenerateContentConfig(system_instruction=FORECAST_SYSTEM_PROMPT),
-            )
-            return {"text": strip_citation_markers(answer.text or ""), "grounding": map_gemini_grounding(search)}
+            result = await chat.send_message(prompt)
+            text = result.text or ""
+            if not text:
+                raise RuntimeError("No response text from model")
+            return {"text": strip_citation_markers(text), "grounding": map_gemini_grounding(result)}
         if engine_name == "claude":
             client = self._require_claude()
             messages = []
