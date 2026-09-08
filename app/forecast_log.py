@@ -222,6 +222,14 @@ def _pending_rows(cutoff: str, limit: int) -> list[dict[str, Any]]:
         connection.close()
 
 
+def _pending_count() -> int:
+    connection = _open_db()
+    try:
+        return int(connection.execute("SELECT COUNT(*) FROM forecasts WHERE status = 'pending'").fetchone()[0])
+    finally:
+        connection.close()
+
+
 def _update_score(row_id: str, values: dict[str, Any]) -> None:
     connection = _open_db()
     try:
@@ -349,7 +357,6 @@ async def score_pending(limit: int = 20, now: datetime | None = None) -> dict[st
     cutoff = _iso(current - timedelta(minutes=15))
     rows = await asyncio.to_thread(_pending_rows, cutoff, max(0, limit))
     scored = 0
-    pending = 0
     skipped = 0
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -379,10 +386,10 @@ async def score_pending(limit: int = 20, now: datetime | None = None) -> dict[st
                     if not candles:
                         logger.warning("No forecast history returned for %s; leaving it pending.", instrument)
                         skipped += 1
-                    pending += 1
                     continue
             await asyncio.to_thread(_update_score, row["id"], result)
             scored += 1
+    pending = await asyncio.to_thread(_pending_count)
     return {"scored": scored, "pending": pending, "skipped": skipped}
 
 

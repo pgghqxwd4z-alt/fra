@@ -121,14 +121,20 @@ const TrackRecord: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {stats.calibration.map((bucket) => (
-                  <tr key={bucket.bucket} className="border-t border-white/5 text-slate-300">
-                    <td className="px-2 py-2">{bucket.bucket}</td>
-                    <td className="px-2 py-2">{bucket.forecasts}</td>
-                    <td className="px-2 py-2">{formatPercent(bucket.hitRate)}</td>
-                    <td className="px-2 py-2">{bucket.meanConfidence.toFixed(1)}%</td>
+                {stats.calibration.length ? (
+                  stats.calibration.map((bucket) => (
+                    <tr key={bucket.bucket} className="border-t border-white/5 text-slate-300">
+                      <td className="px-2 py-2">{bucket.bucket}</td>
+                      <td className="px-2 py-2">{bucket.forecasts}</td>
+                      <td className="px-2 py-2">{formatPercent(bucket.hitRate)}</td>
+                      <td className="px-2 py-2">{bucket.meanConfidence.toFixed(1)}%</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="px-2 py-4 text-center text-slate-500">no resolved forecasts yet</td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>
@@ -158,23 +164,27 @@ const TrackRecord: React.FC = () => {
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <h2 className="mb-3 text-sm font-semibold text-white">By instrument</h2>
           <div className="space-y-2 text-xs">
-            {stats.byInstrument.map((item) => (
+            {stats.byInstrument.length ? stats.byInstrument.map((item) => (
               <div key={item.instrument} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2">
                 <span className="text-slate-300">{item.instrument}</span>
                 <span className="text-slate-400">{item.wins}W / {item.losses}L · {formatPercent(item.hitRate)}</span>
               </div>
-            ))}
+            )) : (
+              <p className="py-2 text-slate-500">nothing resolved yet</p>
+            )}
           </div>
         </section>
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <h2 className="mb-3 text-sm font-semibold text-white">By bias</h2>
           <div className="space-y-2 text-xs">
-            {stats.byBias.map((item) => (
+            {stats.byBias.length ? stats.byBias.map((item) => (
               <div key={item.bias} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2">
                 <span className="text-slate-300">{item.bias}</span>
                 <span className="text-slate-400">{item.wins}W / {item.losses}L · {formatPercent(item.hitRate)}</span>
               </div>
-            ))}
+            )) : (
+              <p className="py-2 text-slate-500">nothing resolved yet</p>
+            )}
           </div>
         </section>
       </div>
