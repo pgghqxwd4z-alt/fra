@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from .prompts import (
@@ -264,39 +265,133 @@ def map_groq_grounding(result: Any) -> list[dict[str, dict[str, str]]]:
     return chunks
 
 
+def map_claude_grounding(message: Any) -> list[dict[str, dict[str, str]]]:
+    chunks: list[dict[str, dict[str, str]]] = []
+    seen: set[str] = set()
+
+    def add(uri: Any, title: Any) -> None:
+        if not isinstance(uri, str) or not re.match(r"https?://", uri, re.IGNORECASE):
+            return
+        normalized = _normalized_uri(uri)
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        chunks.append({"web": {"uri": uri, "title": str(title) if title else uri}})
+
+    def visit(value: Any) -> None:
+        value = object_dict(value)
+        if isinstance(value, list):
+            for child in value:
+                visit(child)
+        elif isinstance(value, dict):
+            block_type = value.get("type")
+            if block_type in {"web_search_result", "web_search_result_location"}:
+                add(value.get("url"), value.get("title"))
+            for child in value.values():
+                visit(child)
+
+    visit(message)
+    return chunks
+
+
+def _claude_text(message: Any) -> str:
+    blocks = message.content
+    return "".join(block.text for block in blocks if block.type == "text" and block.text)
+
+
 class AIProvider:
     def __init__(self) -> None:
         import os
 
-        self.name = "groq" if os.getenv("AI_PROVIDER") == "groq" else "openai"
+        provider = (os.getenv("AI_PROVIDER") or "openai").strip().lower()
+        self.name = provider if provider in {"openai", "groq", "claude"} else "openai"
         self.openai_model = os.getenv("OPENAI_MODEL") or "gpt-4o"
         self.groq_model = os.getenv("GROQ_MODEL") or "groq/compound"
         self.groq_vision_model = os.getenv("GROQ_VISION_MODEL") or "qwen/qwen3.6-27b"
+        self.claude_model = os.getenv("CLAUDE_MODEL") or "claude-sonnet-5"
         openai_key = os.getenv("OPENAI_API_KEY")
         groq_key = os.getenv("GROQ_API_KEY")
-        self.client = (
-            AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
-            if self.name == "groq" and groq_key
-            else AsyncOpenAI(api_key=openai_key)
-            if self.name == "openai" and openai_key
-            else None
-        )
+        claude_key = os.getenv("ANTHROPIC_API_KEY")
+        self._clients: dict[str, AsyncOpenAI | AsyncAnthropic] = {}
+        if openai_key:
+            self._clients["openai"] = AsyncOpenAI(api_key=openai_key)
+        if groq_key:
+            self._clients["groq"] = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
+        if claude_key:
+            self._clients["claude"] = AsyncAnthropic(api_key=claude_key)
+        self.client = self._clients.get(self.name)
 
     @property
     def missing_key_message(self) -> str:
-        return f"{'GROQ' if self.name == 'groq' else 'OPENAI'}_API_KEY environment variable is not set."
+        return self.missing_key_message_for(self.name)
 
-    def require_client(self) -> AsyncOpenAI:
-        if self.client is None:
+    @staticmethod
+    def missing_key_message_for(engine: str) -> str:
+        return f"{ {'openai': 'OPENAI', 'groq': 'GROQ', 'claude': 'ANTHROPIC'}.get(engine, 'OPENAI') }_API_KEY environment variable is not set."
+
+    def has_engine(self, engine: str) -> bool:
+        return engine in self._clients
+
+    def _require_openai(self, engine: str) -> AsyncOpenAI:
+        client = self._clients.get(engine)
+        if not isinstance(client, AsyncOpenAI):
+            raise RuntimeError(self.missing_key_message_for(engine))
+        return client
+
+    def _require_claude(self) -> AsyncAnthropic:
+        client = self._clients.get("claude")
+        if not isinstance(client, AsyncAnthropic):
+            raise RuntimeError(self.missing_key_message_for("claude"))
+        return client
+
+    def require_client(self) -> AsyncOpenAI | AsyncAnthropic:
+        client = self._clients.get(self.name)
+        if client is None:
             raise RuntimeError(self.missing_key_message)
-        return self.client
+        return client
 
-    async def retrieve_knowledge(self, prompt: str, lenses: list[str], market_context: str) -> dict[str, Any]:
+    async def retrieve_knowledge(
+        self,
+        prompt: str,
+        lenses: list[str],
+        market_context: str,
+        engine: str | None = None,
+    ) -> dict[str, Any]:
+        engine_name = engine or self.name
         source_ids = route_knowledge(lenses)
         source_text = "\n".join(f"- {source_id}" for source_id in source_ids)
         retrieval_prompt = build_retrieval_prompt(prompt, market_context, source_text)
-        client = self.require_client()
-        if self.name == "groq":
+        if engine_name == "claude":
+            client = self._require_claude()
+            search_result = await client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": retrieval_prompt}],
+            )
+            source_material = _claude_text(search_result) or "No web search material was returned."
+            result = await client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""{retrieval_prompt}
+
+WEB SEARCH MATERIAL:
+{source_material}
+
+Convert the material above into the requested JSON schema. Return JSON only.""",
+                    }
+                ],
+                output_config={"format": {"type": "json_schema", "schema": KNOWLEDGE_SCHEMA}},
+            )
+            text = _claude_text(result)
+            if not text:
+                return {"items": [], "context": "NO EXTERNAL KNOWLEDGE RETRIEVED.", "warnings": ["Knowledge retrieval returned no text."]}
+            return self.map_knowledge_result(parse_json_object(text))
+        client = self._require_openai(engine_name)
+        if engine_name == "groq":
             result = await client.chat.completions.create(
                 model=self.groq_model,
                 messages=[{"role": "user", "content": retrieval_prompt}],
@@ -459,10 +554,40 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             "sources": sources,
         }
 
-    async def research_market(self, label: str) -> dict[str, Any]:
+    async def research_market(self, label: str, engine: str | None = None) -> dict[str, Any]:
+        engine_name = engine or self.name
         research_prompt = build_research_prompt(label)
-        client = self.require_client()
-        if self.name == "groq":
+        if engine_name == "claude":
+            client = self._require_claude()
+            search_result = await client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": research_prompt}],
+            )
+            source_material = _claude_text(search_result) or "No web search material was returned."
+            result = await client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""{research_prompt}
+
+WEB SEARCH MATERIAL:
+{source_material}
+
+Convert the material above into the requested JSON schema. Return JSON only.""",
+                    }
+                ],
+                output_config={"format": {"type": "json_schema", "schema": RESEARCH_SCHEMA}},
+            )
+            text = _claude_text(result)
+            if not text:
+                raise RuntimeError("No response text from model")
+            return self.map_research_result(parse_json_object(text), map_claude_grounding(search_result))
+        client = self._require_openai(engine_name)
+        if engine_name == "groq":
             result = await client.chat.completions.create(
                 model=self.groq_model,
                 messages=[{"role": "user", "content": research_prompt}],
@@ -508,17 +633,36 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
         market_context: str,
         instructions: str,
         knowledge: dict[str, Any],
+        engine: str | None = None,
     ) -> dict[str, Any]:
+        engine_name = engine or self.name
         augmented_prompt = build_forecast_prompt(
             instructions,
             knowledge["context"],
             "\n".join(knowledge["warnings"]) if knowledge["warnings"] else "",
             market_context,
             prompt,
-            self.name == "groq",
+            engine_name == "groq",
         )
-        client = self.require_client()
-        if self.name == "groq":
+        if engine_name == "claude":
+            client = self._require_claude()
+            message = await client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
+                    {"type": "text", "text": augmented_prompt},
+                ]}],
+                output_config={"format": {"type": "json_schema", "schema": FORECAST_SCHEMA}},
+            )
+            text = _claude_text(message)
+            if not text:
+                raise RuntimeError("No response text from model")
+            forecast = parse_json_object(text)
+            forecast["confidence"] = normalize_forecast(forecast)["confidence"]
+            model = self.claude_model
+        elif engine_name == "groq":
+            client = self._require_openai(engine_name)
             result = await client.chat.completions.create(
                 model=self.groq_vision_model,
                 messages=[
@@ -536,7 +680,9 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             if not text:
                 raise RuntimeError("No response text from model")
             forecast = normalize_forecast(parse_json_object(text))
+            model = self.groq_vision_model
         else:
+            client = self._require_openai(engine_name)
             result = await client.responses.create(
                 model=self.openai_model,
                 input=[
@@ -554,15 +700,38 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
                 raise RuntimeError("No response text from model")
             forecast = json.loads(result.output_text)
             forecast["confidence"] = normalize_forecast(forecast)["confidence"]
+            model = self.openai_model
         return {
             "analysis": json.dumps(forecast, separators=(",", ":"), ensure_ascii=False),
             "forecast": forecast,
             "knowledge": {"items": knowledge["items"], "warnings": knowledge["warnings"]},
+            "engine": engine_name,
+            "model": model,
         }
 
-    async def chat(self, prompt: str, history: list[dict[str, Any]]) -> dict[str, Any]:
-        client = self.require_client()
-        if self.name == "groq":
+    async def chat(self, prompt: str, history: list[dict[str, Any]], engine: str | None = None) -> dict[str, Any]:
+        engine_name = engine or self.name
+        if engine_name == "claude":
+            client = self._require_claude()
+            messages = []
+            for entry in history or []:
+                messages.append(
+                    {
+                        "role": "assistant" if entry.get("role") in {"model", "assistant"} else "user",
+                        "content": (entry.get("parts") or [{}])[0].get("text") or entry.get("text") or "",
+                    }
+                )
+            messages.append({"role": "user", "content": prompt})
+            result = await client.messages.create(
+                model=self.claude_model,
+                max_tokens=4096,
+                system=FORECAST_SYSTEM_PROMPT,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=messages,
+            )
+            return {"text": strip_citation_markers(_claude_text(result)), "grounding": map_claude_grounding(result)}
+        client = self._require_openai(engine_name)
+        if engine_name == "groq":
             messages = [{"role": "system", "content": FORECAST_SYSTEM_PROMPT}]
             for entry in history or []:
                 messages.append(

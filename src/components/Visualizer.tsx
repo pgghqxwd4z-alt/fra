@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ForecastResult, MarketResearch, MarketVerification } from '../types';
+import { Consensus, ForecastResult, MarketResearch, MarketVerification } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -74,6 +74,46 @@ const MarketResearchSources: React.FC<{ research: MarketResearch }> = ({ researc
         </a>
       ))}
     </div>
+  );
+};
+
+const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> = ({ consensus, fullscreen = false }) => {
+  if (!consensus) return null;
+  const badgeClass = {
+    AGREE: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+    PARTIAL: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+    CONFLICT: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
+    SINGLE: 'border-slate-400/30 bg-slate-400/10 text-slate-300',
+  }[consensus.verdict];
+  return (
+    <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className="flex items-center justify-between gap-3">
+        <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-emerald-400' : 'text-[6px] font-bold uppercase tracking-widest text-emerald-400'}>
+          Model consensus
+        </div>
+        <span className={`rounded-full border px-2 py-0.5 font-mono font-bold ${fullscreen ? 'text-xs' : 'text-[7px]'} ${badgeClass}`}>
+          {consensus.verdict}
+        </span>
+      </div>
+      <div className={fullscreen ? 'mt-3 space-y-2' : 'mt-2 space-y-1'}>
+        {consensus.models.map((model) => (
+          <div key={model.engine} className={`flex flex-wrap gap-x-3 gap-y-1 font-mono text-slate-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+            <span className="text-white">{model.engine}</span>
+            <span>{model.bias}/{model.direction}</span>
+            <span>{model.confidence}%</span>
+            {fullscreen && <span>TP1 {model.tp1}</span>}
+            {fullscreen && <span>Invalidation {model.invalidation}</span>}
+            {fullscreen && <span>Next: {model.nextMove}</span>}
+          </div>
+        ))}
+      </div>
+      {consensus.notes && <p className={`mt-2 text-slate-400 ${fullscreen ? 'text-sm' : 'text-[7px]'}`}>{consensus.notes}</p>}
+      {consensus.failures.length > 0 && (
+        <div className={`mt-2 space-y-1 text-rose-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {consensus.failures.map((failure) => <div key={failure.engine}>⚠ {failure.engine}: {failure.error}</div>)}
+        </div>
+      )}
+    </section>
   );
 };
 
@@ -229,6 +269,7 @@ const Visualizer: React.FC = () => {
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
   const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
   const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
+  const [consensus, setConsensus] = useState<Consensus | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [prompt, setPrompt] = useState(`
@@ -383,6 +424,7 @@ Focus primarily on the future price path from the current market state.
       setForecast(result.forecast);
       setMarketVerification(result.marketVerification || null);
       setMarketResearch(result.marketResearch || null);
+      setConsensus(result.consensus || null);
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
@@ -503,6 +545,7 @@ Focus primarily on the future price path from the current market state.
                       setForecast(null);
                       setMarketVerification(null);
                       setMarketResearch(null);
+                      setConsensus(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
@@ -567,6 +610,7 @@ Focus primarily on the future price path from the current market state.
 
                 {marketVerification && <MarketVerificationLine verification={marketVerification} />}
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
+                <ConsensusStrip consensus={consensus || undefined} />
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
@@ -711,6 +755,7 @@ Focus primarily on the future price path from the current market state.
                 <MarketResearchSources research={marketResearch} />
               </>
             )}
+            <ConsensusStrip consensus={consensus || undefined} fullscreen />
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>

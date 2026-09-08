@@ -4,7 +4,8 @@ import {
   MarketResearch,
   MarketVerification,
   ForecastRecord,
-  ForecastStats
+  ForecastStats,
+  Consensus
 } from "../types";
 
 interface ChatResponse {
@@ -19,6 +20,7 @@ interface AnnotateResponse {
   forecast: ForecastResult | null;
   marketVerification?: MarketVerification;
   marketResearch?: MarketResearch;
+  consensus?: Consensus;
 }
 
 interface TrackRecordResponse {
@@ -76,7 +78,8 @@ export const aiService = {
         analysis: data.analysis,
         forecast: data.forecast,
         marketVerification: data.marketVerification,
-        marketResearch: data.marketResearch
+        marketResearch: data.marketResearch,
+        consensus: data.consensus
       };
     } catch (error) {
       console.error("Forecast Error:", error);

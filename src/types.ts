@@ -125,6 +125,30 @@ export interface ForecastResult {
   timestamp?: number;
 }
 
+export interface ConsensusModel {
+  engine: string;
+  model: string;
+  bias: string;
+  direction: string;
+  confidence: number;
+  tp1: string;
+  invalidation: string;
+  nextMove: string;
+}
+
+export interface Consensus {
+  verdict: 'AGREE' | 'PARTIAL' | 'CONFLICT' | 'SINGLE';
+  models: ConsensusModel[];
+  biasAgreement: boolean;
+  directionAgreement: boolean;
+  confidenceSpread: number;
+  notes: string;
+  failures: {
+    engine: string;
+    error: string;
+  }[];
+}
+
 export interface MarketVerification {
   source: 'oanda' | 'twelvedata' | 'yahoo';
   instrument: string;
@@ -181,6 +205,8 @@ export interface ForecastRecord {
   maxFavorable: number | null;
   maxAdverse: number | null;
   scoredAt: string | null;
+  engine: string | null;
+  consensus: string | null;
 }
 
 export interface ForecastStats {
@@ -203,6 +229,18 @@ export interface ForecastStats {
   }[];
   byBias: {
     bias: string;
+    wins: number;
+    losses: number;
+    hitRate: number | null;
+  }[];
+  byEngine: {
+    engine: string;
+    wins: number;
+    losses: number;
+    hitRate: number | null;
+  }[];
+  byConsensus: {
+    verdict: string;
     wins: number;
     losses: number;
     hitRate: number | null;

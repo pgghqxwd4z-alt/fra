@@ -13,6 +13,19 @@ const formatPercent = (value: number | null): string =>
 const formatDate = (value: string | null): string =>
   value ? new Date(value).toLocaleString() : '—';
 
+const formatConsensus = (value: string | null): string => {
+  if (!value) return '—';
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed === 'object' && parsed !== null && 'verdict' in parsed && typeof parsed.verdict === 'string') {
+      return parsed.verdict;
+    }
+  } catch {
+    // Keep legacy values as-is.
+  }
+  return value;
+};
+
 const statusClass: Record<string, string> = {
   pending: 'text-amber-300',
   tp1: 'text-emerald-300',
@@ -160,7 +173,7 @@ const TrackRecord: React.FC = () => {
         </section>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <h2 className="mb-3 text-sm font-semibold text-white">By instrument</h2>
           <div className="space-y-2 text-xs">
@@ -187,6 +200,32 @@ const TrackRecord: React.FC = () => {
             )}
           </div>
         </section>
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          <h2 className="mb-3 text-sm font-semibold text-white">By model</h2>
+          <div className="space-y-2 text-xs">
+            {stats.byEngine.length ? stats.byEngine.map((item) => (
+              <div key={item.engine} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2">
+                <span className="text-slate-300">{item.engine}</span>
+                <span className="text-slate-400">{item.wins}W / {item.losses}L · {formatPercent(item.hitRate)}</span>
+              </div>
+            )) : (
+              <p className="py-2 text-slate-500">nothing resolved yet</p>
+            )}
+          </div>
+        </section>
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          <h2 className="mb-3 text-sm font-semibold text-white">By consensus</h2>
+          <div className="space-y-2 text-xs">
+            {stats.byConsensus.length ? stats.byConsensus.map((item) => (
+              <div key={item.verdict} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2">
+                <span className="text-slate-300">{item.verdict}</span>
+                <span className="text-slate-400">{item.wins}W / {item.losses}L · {formatPercent(item.hitRate)}</span>
+              </div>
+            )) : (
+              <p className="py-2 text-slate-500">nothing resolved yet</p>
+            )}
+          </div>
+        </section>
       </div>
 
       <section className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -199,6 +238,8 @@ const TrackRecord: React.FC = () => {
                 <th className="px-2 py-2">Instrument</th>
                 <th className="px-2 py-2">Bias</th>
                 <th className="px-2 py-2">Confidence</th>
+                <th className="px-2 py-2">Engine</th>
+                <th className="px-2 py-2">Consensus</th>
                 <th className="px-2 py-2">TP1</th>
                 <th className="px-2 py-2">Invalidation</th>
                 <th className="px-2 py-2">Status</th>
@@ -212,6 +253,8 @@ const TrackRecord: React.FC = () => {
                   <td className="px-2 py-2">{forecast.instrument}</td>
                   <td className="px-2 py-2">{forecast.bias}</td>
                   <td className="px-2 py-2">{forecast.confidence}%</td>
+                  <td className="px-2 py-2">{forecast.engine ?? '—'}</td>
+                  <td className="px-2 py-2">{formatConsensus(forecast.consensus)}</td>
                   <td className="px-2 py-2">{forecast.tp1 ?? '—'}</td>
                   <td className="px-2 py-2">{forecast.invalidation ?? '—'}</td>
                   <td className={`px-2 py-2 font-medium ${statusClass[forecast.status] ?? 'text-slate-300'}`}>

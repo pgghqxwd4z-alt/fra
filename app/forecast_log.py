@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -84,10 +85,16 @@ def _open_db() -> sqlite3.Connection:
             resolved_price REAL,
             max_favorable REAL,
             max_adverse REAL,
-            scored_at TEXT
+            scored_at TEXT,
+            engine TEXT,
+            consensus TEXT
         )
         """
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(forecasts)").fetchall()}
+    for column in ("engine", "consensus"):
+        if column not in columns:
+            connection.execute(f"ALTER TABLE forecasts ADD COLUMN {column} TEXT")
     connection.execute("CREATE INDEX IF NOT EXISTS forecasts_status_created ON forecasts (status, created_at)")
     connection.commit()
     return connection
@@ -147,6 +154,8 @@ def record_forecast(
     forecast: dict[str, Any],
     instrument: str | None,
     verification: dict[str, Any] | None,
+    engine: str | None = None,
+    consensus: dict[str, Any] | None = None,
 ) -> str | None:
     if not _enabled() or instrument is None:
         return None
@@ -175,8 +184,8 @@ def record_forecast(
             INSERT INTO forecasts (
                 id, created_at, instrument, bias, direction, confidence,
                 reference_price, feed_source, feed_proxy, tp1, tp2, final_target,
-                invalidation, status, unscorable_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                invalidation, status, unscorable_reason, engine, consensus
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row_id,
@@ -194,6 +203,8 @@ def record_forecast(
                 values["invalidation"],
                 status,
                 reason,
+                engine,
+                json.dumps(consensus, separators=(",", ":")) if consensus is not None else None,
             ),
         )
         connection.commit()
@@ -398,30 +409,52 @@ def _hit_rate(wins: int, losses: int) -> float | None:
     return wins / sample if sample else None
 
 
+def _consensus_verdict(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    return parsed.get("verdict") if isinstance(parsed, dict) and isinstance(parsed.get("verdict"), str) else None
+
+
 def _stats_sync() -> dict[str, Any]:
     connection = _open_db()
     try:
         rows = connection.execute(
-            "SELECT status, instrument, bias, confidence FROM forecasts"
+            "SELECT status, instrument, bias, confidence, engine, consensus FROM forecasts"
         ).fetchall()
     finally:
         connection.close()
     status_counts = {status: 0 for status in STATUSES}
     by_instrument: dict[str, dict[str, int]] = {}
     by_bias: dict[str, dict[str, int]] = {}
+    by_engine: dict[str, dict[str, int]] = {}
+    by_consensus: dict[str, dict[str, int]] = {}
     calibration: dict[str, dict[str, float]] = {}
-    for status, instrument, bias, confidence in rows:
+    for status, instrument, bias, confidence, engine, consensus in rows:
         status_counts[status] = status_counts.get(status, 0) + 1
         if status in {"tp1", "tp2", "final"}:
             instrument_stats = by_instrument.setdefault(instrument, {"wins": 0, "losses": 0})
             bias_stats = by_bias.setdefault(bias, {"wins": 0, "losses": 0})
             instrument_stats["wins"] += 1
             bias_stats["wins"] += 1
+            if engine:
+                by_engine.setdefault(engine, {"wins": 0, "losses": 0})["wins"] += 1
+            verdict = _consensus_verdict(consensus)
+            if verdict:
+                by_consensus.setdefault(verdict, {"wins": 0, "losses": 0})["wins"] += 1
         elif status == "invalidated":
             instrument_stats = by_instrument.setdefault(instrument, {"wins": 0, "losses": 0})
             bias_stats = by_bias.setdefault(bias, {"wins": 0, "losses": 0})
             instrument_stats["losses"] += 1
             bias_stats["losses"] += 1
+            if engine:
+                by_engine.setdefault(engine, {"wins": 0, "losses": 0})["losses"] += 1
+            verdict = _consensus_verdict(consensus)
+            if verdict:
+                by_consensus.setdefault(verdict, {"wins": 0, "losses": 0})["losses"] += 1
         if status in {"tp1", "tp2", "final", "invalidated"}:
             bucket_start = min(90, max(0, (int(confidence) // 10) * 10))
             bucket = f"{bucket_start}-{bucket_start + 9}" if bucket_start < 90 else "90-100"
@@ -449,6 +482,24 @@ def _stats_sync() -> dict[str, Any]:
             "hitRate": _hit_rate(values["wins"], values["losses"]),
         }
         for bias, values in sorted(by_bias.items())
+    ]
+    by_engine_result = [
+        {
+            "engine": engine,
+            "wins": values["wins"],
+            "losses": values["losses"],
+            "hitRate": _hit_rate(values["wins"], values["losses"]),
+        }
+        for engine, values in sorted(by_engine.items())
+    ]
+    by_consensus_result = [
+        {
+            "verdict": verdict,
+            "wins": values["wins"],
+            "losses": values["losses"],
+            "hitRate": _hit_rate(values["wins"], values["losses"]),
+        }
+        for verdict, values in sorted(by_consensus.items())
     ]
     calibration_result = []
     for bucket, values in sorted(calibration.items(), key=lambda item: int(item[0].split("-")[0])):
@@ -478,6 +529,8 @@ def _stats_sync() -> dict[str, Any]:
         "sample": wins + losses,
         "byInstrument": by_instrument_result,
         "byBias": by_bias_result,
+        "byEngine": by_engine_result,
+        "byConsensus": by_consensus_result,
         "calibration": calibration_result,
         "horizonHours": _horizon_hours(),
         "storage": {"path": str(_db_path()), "durable": _durable()},
@@ -523,6 +576,8 @@ def _recent_sync(limit: int) -> list[dict[str, Any]]:
                 "maxFavorable": row["max_favorable"],
                 "maxAdverse": row["max_adverse"],
                 "scoredAt": row["scored_at"],
+                "engine": row["engine"],
+                "consensus": row["consensus"],
             }
         )
     return result

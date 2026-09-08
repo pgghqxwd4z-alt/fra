@@ -5,6 +5,7 @@ import binascii
 import asyncio
 import hmac
 import ipaddress
+import json
 import logging
 import os
 import time
@@ -184,6 +185,78 @@ def lens_instructions(lenses: list[str]) -> list[str]:
     return instructions
 
 
+def consensus_enabled() -> bool:
+    return os.getenv("CONSENSUS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def consensus_engines() -> list[str]:
+    configured = [value.strip().lower() for value in os.getenv("CONSENSUS_ENGINES", "openai,claude").split(",")]
+    engines: list[str] = []
+    for engine in [provider.name, *configured]:
+        if engine not in {"openai", "groq", "claude"} or not provider.has_engine(engine) or engine in engines:
+            continue
+        engines.append(engine)
+    return engines
+
+
+def build_consensus(successes: list[dict[str, Any]], failures: list[dict[str, str]]) -> dict[str, Any]:
+    models = [
+        {
+            "engine": result["engine"],
+            "model": result["model"],
+            "bias": result["forecast"]["bias"],
+            "direction": result["forecast"]["entry"]["direction"],
+            "confidence": result["forecast"]["confidence"],
+            "tp1": result["forecast"]["targets"]["tp1"],
+            "invalidation": result["forecast"]["invalidation"],
+            "nextMove": result["forecast"]["nextMove"],
+        }
+        for result in successes
+    ]
+    if len(models) < 2:
+        verdict = "SINGLE"
+    else:
+        biases = {model["bias"] for model in models}
+        directions = {model["direction"] for model in models}
+        opposite_biases = {"BULLISH", "BEARISH"} <= biases
+        opposite_directions = {"BUY", "SELL"} <= directions
+        if len(biases) == 1 and len(directions) == 1:
+            verdict = "AGREE"
+        elif opposite_biases or opposite_directions:
+            verdict = "CONFLICT"
+        else:
+            verdict = "PARTIAL"
+    notes = " vs ".join(
+        f"{model['engine']} {model['bias']}/{model['direction']} {model['confidence']}" for model in models
+    )
+    confidences = [model["confidence"] for model in models]
+    return {
+        "verdict": verdict,
+        "models": models,
+        "biasAgreement": len({model["bias"] for model in models}) <= 1,
+        "directionAgreement": len({model["direction"] for model in models}) <= 1,
+        "confidenceSpread": max(confidences) - min(confidences) if confidences else 0,
+        "notes": notes,
+        "failures": failures,
+    }
+
+
+def apply_consensus_cap(result: dict[str, Any], consensus: dict[str, Any]) -> None:
+    forecast = result["forecast"]
+    verdict = consensus["verdict"]
+    if verdict == "PARTIAL":
+        forecast["confidence"] = min(forecast["confidence"], 60)
+        forecast.setdefault("warnings", []).append(f"Model consensus partial: {consensus['notes']}.")
+    elif verdict == "CONFLICT":
+        forecast["confidence"] = min(forecast["confidence"], 45)
+        forecast.setdefault("warnings", []).append(f"Model consensus conflict: {consensus['notes']}.")
+    elif verdict == "SINGLE":
+        for failure in consensus["failures"]:
+            forecast.setdefault("warnings", []).append(f"Consensus unavailable: {failure['engine']} failed.")
+    result["consensus"] = consensus
+    result["analysis"] = json.dumps(forecast, separators=(",", ":"), ensure_ascii=False)
+
+
 @app.post("/api/knowledge/search")
 async def knowledge_search(payload: dict[str, Any]) -> Any:
     try:
@@ -229,32 +302,73 @@ async def annotate(payload: dict[str, Any]) -> Any:
         ]
         market_context = "\n\n".join(part for part in context_parts if part)
         knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
-        result = await provider.annotate(
-            payload.get("base64Image", ""),
-            prompt,
-            lenses,
-            market_context,
-            "\n".join(lens_instructions(lenses)),
-            knowledge,
-        )
+        instructions = "\n".join(lens_instructions(lenses))
+        engines = consensus_engines()
+        if consensus_enabled() and len(engines) >= 2:
+            attempts = await asyncio.gather(
+                *(
+                    provider.annotate(
+                        payload.get("base64Image", ""),
+                        prompt,
+                        lenses,
+                        market_context,
+                        instructions,
+                        knowledge,
+                        engine=engine,
+                    )
+                    for engine in engines
+                ),
+                return_exceptions=True,
+            )
+        else:
+            attempts = [
+                await provider.annotate(
+                    payload.get("base64Image", ""),
+                    prompt,
+                    lenses,
+                    market_context,
+                    instructions,
+                    knowledge,
+                    engine=provider.name,
+                )
+            ]
+        successes: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        for engine, attempt in zip(engines if consensus_enabled() and len(engines) >= 2 else [provider.name], attempts):
+            if isinstance(attempt, Exception):
+                logger.warning("Consensus %s annotation failed: %s", engine, attempt)
+                failures.append({"engine": engine, "error": str(attempt)})
+            else:
+                successes.append(attempt)
+        if not successes:
+            first_failure = next((attempt for attempt in attempts if isinstance(attempt, Exception)), RuntimeError("AI request failed"))
+            raise first_failure
+        consensus = build_consensus(successes, failures)
+        result = successes[0]
+        apply_consensus_cap(result, consensus)
         if market_data:
             result["marketVerification"] = market_data.verification
         if market_research:
             result["marketResearch"] = market_research.metadata
         try:
-            forecast = result.get("forecast")
-            forecast_id = (
-                await asyncio.to_thread(
-                    record_forecast,
-                    forecast,
-                    instrument,
-                    market_data.verification if market_data else None,
+            forecast_ids = []
+            for model_result in successes:
+                forecast = model_result.get("forecast")
+                forecast_id = (
+                    await asyncio.to_thread(
+                        record_forecast,
+                        forecast,
+                        instrument,
+                        market_data.verification if market_data else None,
+                        model_result.get("engine"),
+                        consensus,
+                    )
+                    if isinstance(forecast, dict)
+                    else None
                 )
-                if isinstance(forecast, dict)
-                else None
-            )
-            if forecast_id:
-                result["forecastId"] = forecast_id
+                forecast_ids.append(forecast_id)
+            if forecast_ids and forecast_ids[0]:
+                result["forecastId"] = forecast_ids[0]
         except Exception as error:
             logger.warning("Forecast logging failed: %s", error)
         return result
