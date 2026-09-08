@@ -2,7 +2,9 @@ import {
   ForecastResult,
   GroundingChunk,
   MarketResearch,
-  MarketVerification
+  MarketVerification,
+  ForecastRecord,
+  ForecastStats
 } from "../types";
 
 interface ChatResponse {
@@ -17,6 +19,17 @@ interface AnnotateResponse {
   forecast: ForecastResult | null;
   marketVerification?: MarketVerification;
   marketResearch?: MarketResearch;
+}
+
+interface TrackRecordResponse {
+  forecasts: ForecastRecord[];
+  stats: ForecastStats;
+}
+
+interface ScoreResponse {
+  scored: number;
+  pending: number;
+  skipped: number;
 }
 
 interface HistoryEntry {
@@ -95,6 +108,22 @@ export const aiService = {
       console.error("Chat Error:", error);
       throw error;
     }
+  },
+
+  async getTrackRecord(): Promise<TrackRecordResponse> {
+    const response = await fetch("/api/forecasts");
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to load track record");
+    }
+    return response.json();
+  },
+
+  async rescoreForecasts(): Promise<ScoreResponse> {
+    const response = await fetch("/api/forecasts/score", { method: "POST" });
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to score forecasts");
+    }
+    return response.json();
   }
 
 };

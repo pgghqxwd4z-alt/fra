@@ -67,6 +67,26 @@ latency, degrades silently to screenshot-only forecasting when unavailable,
 and requires a resolved instrument.
 Provider keys are server-side only.
 
+Forecast logging is enabled by default with `FORECAST_LOG_ENABLED=1`. Each
+recognised-instrument forecast records its direction, confidence, live
+reference price, parsed TP1/TP2/final and invalidation levels, feed metadata,
+and later scoring fields in SQLite at `FORECAST_DB_PATH` (default
+`data/forecasts.db`). The scorer marks a forecast as a win when TP1, TP2, or
+the final target is reached, and as a loss when invalidation is reached first.
+If TP1 and invalidation occur in the same M15 candle, the result is
+`ambiguous`; a forecast with no touched level at the end of its configured
+window is `expired`. Ambiguous and expired forecasts are excluded from the
+win-rate denominator. Allow weeks of live forecasts to accumulate before
+treating the hit rate as meaningful.
+
+`FORECAST_HORIZON_HOURS` defaults to `48`. `FORECAST_DB_DURABLE=1` selects
+durable SQLite settings when the configured path is on persistent storage.
+Render's free plan uses ephemeral storage, so the SQLite log is lost on
+redeploy unless `FORECAST_DB_PATH` is moved to a persistent disk; this
+configuration does not add a Render disk. Yahoo Finance's 15-minute history
+only reaches back approximately 60 days, which can limit scoring of older
+forecasts.
+
 ## Render deployment
 
 The repository includes a multi-stage `Dockerfile` and a `render.yaml`

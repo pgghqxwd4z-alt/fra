@@ -18,12 +18,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.status import HTTP_401_UNAUTHORIZED
 from starlette.types import ASGIApp
 
+from .forecast_log import recent, record_forecast, score_pending, stats
 from .market import fetch_market_data, resolve_instrument
 from .providers import AIProvider
 from .research import fetch_market_research
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("quantsage")
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -239,6 +241,22 @@ async def annotate(payload: dict[str, Any]) -> Any:
             result["marketVerification"] = market_data.verification
         if market_research:
             result["marketResearch"] = market_research.metadata
+        try:
+            forecast = result.get("forecast")
+            forecast_id = (
+                await asyncio.to_thread(
+                    record_forecast,
+                    forecast,
+                    instrument,
+                    market_data.verification if market_data else None,
+                )
+                if isinstance(forecast, dict)
+                else None
+            )
+            if forecast_id:
+                result["forecastId"] = forecast_id
+        except Exception as error:
+            logger.warning("Forecast logging failed: %s", error)
         return result
     except Exception as error:
         logger.exception("Annotate error:")
@@ -252,6 +270,17 @@ async def chat(payload: dict[str, Any]) -> Any:
     except Exception as error:
         logger.exception("Chat error:")
         return error_response(error)
+
+
+@app.get("/api/forecasts")
+async def forecasts() -> dict[str, Any]:
+    await score_pending(limit=20)
+    return {"forecasts": await recent(50), "stats": await stats()}
+
+
+@app.post("/api/forecasts/score")
+async def score_forecasts() -> dict[str, int]:
+    return await score_pending(limit=100)
 
 
 CLIENT_DIST = Path.cwd() / "dist" / "client"

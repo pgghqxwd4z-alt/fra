@@ -39,3 +39,11 @@ services:
         value: "1"
       - key: MARKET_RESEARCH_ENABLED
         value: "1"
+      - key: FORECAST_LOG_ENABLED
+        value: "1"
+      - key: FORECAST_DB_PATH
+        value: data/forecasts.db
+      - key: FORECAST_HORIZON_HOURS
+        value: "48"
+      - key: FORECAST_DB_DURABLE
+        value: "0"

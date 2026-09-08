@@ -185,7 +185,7 @@ async def _request_market_data(
     )
 
 
-def _parse_yahoo_candles(payload: Any, interval: str) -> list[Candle]:
+def _parse_yahoo_candles(payload: Any, interval: str, limit: int | None = 24) -> list[Candle]:
     if not isinstance(payload, dict):
         raise ValueError(f"Yahoo {interval} response was malformed.")
     chart = payload.get("chart")
@@ -229,7 +229,8 @@ def _parse_yahoo_candles(payload: Any, interval: str) -> list[Candle]:
             raise ValueError(f"Yahoo {interval} response contained an invalid timestamp.") from error
         candles.append(Candle(timestamp_text, *values))
 
-    candles = candles[-24:]
+    if limit is not None:
+        candles = candles[-limit:]
     if len(candles) < 2:
         raise ValueError(f"Yahoo {interval} response contained fewer than two valid candles.")
     return candles
@@ -349,6 +350,109 @@ async def _request_twelvedata_market_data(client: Any, instrument: str) -> Marke
             "asOf": as_of,
         },
     )
+
+
+def _filter_history(candles: list[Candle], start: datetime, end: datetime) -> list[Candle]:
+    start_utc = start.astimezone(timezone.utc) if start.tzinfo else start.replace(tzinfo=timezone.utc)
+    end_utc = end.astimezone(timezone.utc) if end.tzinfo else end.replace(tzinfo=timezone.utc)
+    filtered = []
+    for candle in candles:
+        try:
+            timestamp = datetime.fromisoformat(candle.timestamp.replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp = timestamp.astimezone(timezone.utc)
+        except ValueError:
+            continue
+        if start_utc < timestamp <= end_utc:
+            filtered.append(candle)
+    return filtered
+
+
+async def _request_oanda_history(client: Any, instrument: str, start: datetime, end: datetime, environment: str) -> list[Candle]:
+    endpoint = f"https://{OANDA_HOSTS[environment]}/v3/instruments/{quote(instrument, safe='')}/candles"
+    response = await client.get(
+        endpoint,
+        params={
+            "granularity": "M15",
+            "price": "M",
+            "from": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "to": end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        },
+        headers={"Authorization": f"Bearer {os.environ['OANDA_API_TOKEN']}"},
+    )
+    response.raise_for_status()
+    return _filter_history(_parse_candles(response.json(), "M15"), start, end)
+
+
+async def _request_twelvedata_history(client: Any, instrument: str, start: datetime, end: datetime) -> list[Candle]:
+    symbol = TWELVEDATA_SYMBOLS[instrument]
+    response = await client.get(
+        "https://api.twelvedata.com/time_series",
+        params={
+            "symbol": symbol,
+            "interval": "15min",
+            "start_date": start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "end_date": end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "outputsize": 5000,
+            "timezone": "UTC",
+            "format": "JSON",
+            "apikey": os.environ["TWELVEDATA_API_KEY"],
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        raise ValueError("Twelve Data 15min response was not successful.")
+    return _filter_history(_parse_twelvedata_candles(payload, "15min"), start, end)
+
+
+async def _request_yahoo_history(client: Any, instrument: str, start: datetime, end: datetime) -> list[Candle]:
+    symbol, _ = YAHOO_SYMBOLS[instrument]
+    endpoint = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol, safe='')}"
+    response = await client.get(
+        endpoint,
+        params={
+            "interval": "15m",
+            "period1": int(start.timestamp()),
+            "period2": int(end.timestamp()),
+        },
+        headers={"User-Agent": "Mozilla/5.0 (compatible; QuantSage/1.0)"},
+    )
+    response.raise_for_status()
+    return _filter_history(_parse_yahoo_candles(response.json(), "15m", limit=None), start, end)
+
+
+async def fetch_history(instrument: str, start: datetime, end: datetime) -> list[Candle]:
+    if not instrument:
+        return []
+    start_utc = start.astimezone(timezone.utc) if start.tzinfo else start.replace(tzinfo=timezone.utc)
+    end_utc = end.astimezone(timezone.utc) if end.tzinfo else end.replace(tzinfo=timezone.utc)
+    token = os.getenv("OANDA_API_TOKEN", "").strip()
+    if token:
+        environment = _environment()
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                return await _request_oanda_history(client, instrument, start_utc, end_utc, environment)
+        except Exception as error:
+            logger.warning("Oanda forecast history failed (%s); trying the next configured feed.", error)
+    twelvedata_key = os.getenv("TWELVEDATA_API_KEY", "").strip()
+    if twelvedata_key and instrument in TWELVEDATA_SYMBOLS:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                return await _request_twelvedata_history(client, instrument, start_utc, end_utc)
+        except Exception as error:
+            logger.warning("Twelve Data forecast history failed (%s); trying Yahoo Finance.", error)
+    if os.getenv("MARKET_FALLBACK_ENABLED", "1").strip().lower() in {"0", "false", "no"}:
+        return []
+    if instrument not in YAHOO_SYMBOLS:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            return await _request_yahoo_history(client, instrument, start_utc, end_utc)
+    except Exception as error:
+        logger.warning("Yahoo Finance forecast history failed (%s).", error)
+        return []
 
 
 async def fetch_market_data(instrument: str | None) -> MarketData | None:

@@ -3,7 +3,8 @@ export enum AnalysisTab {
   VISUALIZER = 'Visualizer',
   STRATEGIES = 'Strategies',
   WISDOM = 'Wisdom',
-  FRAMEWORK = 'Framework'
+  FRAMEWORK = 'Framework',
+  TRACK_RECORD = 'Track Record'
 }
 
 export interface Message {
@@ -157,4 +158,66 @@ export interface MarketResearch {
     uri: string;
     title: string;
   }[];
+}
+
+export interface ForecastRecord {
+  id: string;
+  createdAt: string;
+  instrument: string;
+  bias: string;
+  direction: string;
+  confidence: number;
+  referencePrice: number | null;
+  feedSource: string | null;
+  feedProxy: boolean;
+  tp1: number | null;
+  tp2: number | null;
+  finalTarget: number | null;
+  invalidation: number | null;
+  status: string;
+  unscorableReason: string | null;
+  resolvedAt: string | null;
+  resolvedPrice: number | null;
+  maxFavorable: number | null;
+  maxAdverse: number | null;
+  scoredAt: string | null;
+}
+
+export interface ForecastStats {
+  totals: {
+    logged: number;
+    pending: number;
+    unscorable: number;
+    expired: number;
+    ambiguous: number;
+    wins: number;
+    losses: number;
+  };
+  hitRate: number | null;
+  sample: number;
+  byInstrument: {
+    instrument: string;
+    wins: number;
+    losses: number;
+    hitRate: number | null;
+  }[];
+  byBias: {
+    bias: string;
+    wins: number;
+    losses: number;
+    hitRate: number | null;
+  }[];
+  calibration: {
+    bucket: string;
+    forecasts: number;
+    wins: number;
+    losses: number;
+    hitRate: number | null;
+    meanConfidence: number;
+  }[];
+  horizonHours: number;
+  storage: {
+    path: string;
+    durable: boolean;
+  };
 }
