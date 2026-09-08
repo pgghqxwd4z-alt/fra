@@ -229,7 +229,8 @@ def _update_score(row_id: str, values: dict[str, Any]) -> None:
             """
             UPDATE forecasts
             SET status = ?, resolved_at = ?, resolved_price = ?,
-                max_favorable = ?, max_adverse = ?, scored_at = ?
+                max_favorable = ?, max_adverse = ?, scored_at = ?,
+                unscorable_reason = ?
             WHERE id = ? AND status = 'pending'
             """,
             (
@@ -239,6 +240,7 @@ def _update_score(row_id: str, values: dict[str, Any]) -> None:
                 values.get("max_favorable"),
                 values.get("max_adverse"),
                 values["scored_at"],
+                values.get("unscorable_reason"),
                 row_id,
             ),
         )
@@ -253,8 +255,23 @@ def _candle_time(timestamp: str) -> datetime:
 
 def _score_candles(row: dict[str, Any], candles: list[market.Candle], now: datetime) -> dict[str, Any] | None:
     created_at = _parse_timestamp(row["created_at"])
-    filtered = [candle for candle in candles if _candle_time(candle.timestamp) > created_at]
+    horizon = created_at + timedelta(hours=_horizon_hours())
+    end = min(now, horizon)
+    filtered = [
+        candle
+        for candle in candles
+        if created_at < _candle_time(candle.timestamp) <= end
+    ]
     if not filtered:
+        if candles and now >= horizon:
+            return {
+                "status": "expired",
+                "resolved_at": None,
+                "resolved_price": None,
+                "max_favorable": 0.0,
+                "max_adverse": 0.0,
+                "scored_at": _iso(now),
+            }
         return None
     reference = float(row["reference_price"])
     direction = row["direction"]
@@ -311,7 +328,6 @@ def _score_candles(row: dict[str, Any], candles: list[market.Candle], now: datet
                 if status_order[status] > status_order[best_status]:
                     best_status = status
     if best_status is None:
-        horizon = created_at + timedelta(hours=_horizon_hours())
         if now >= horizon:
             best_status = "expired"
         else:
@@ -323,6 +339,7 @@ def _score_candles(row: dict[str, Any], candles: list[market.Candle], now: datet
         "max_favorable": max_favorable,
         "max_adverse": max_adverse,
         "scored_at": _iso(now),
+        "unscorable_reason": None,
     }
 
 
@@ -334,23 +351,38 @@ async def score_pending(limit: int = 20, now: datetime | None = None) -> dict[st
     scored = 0
     pending = 0
     skipped = 0
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        created_at = _parse_timestamp(row["created_at"])
-        end = min(current, created_at + timedelta(hours=_horizon_hours()))
+        grouped.setdefault(row["instrument"], []).append(row)
+    for instrument, instrument_rows in grouped.items():
+        group_start = min(_parse_timestamp(row["created_at"]) for row in instrument_rows)
         try:
-            candles = await market.fetch_history(row["instrument"], start=created_at, end=end)
+            candles = await market.fetch_history(instrument, start=group_start, end=current)
         except Exception as error:
-            logger.warning("Forecast history failed for %s: %s", row["instrument"], error)
+            logger.warning("Forecast history failed for %s: %s", instrument, error)
             candles = []
-        result = _score_candles(row, candles, current)
-        if result is None:
-            if not candles:
-                logger.warning("No forecast history returned for %s; leaving it pending.", row["instrument"])
-                skipped += 1
-            pending += 1
-            continue
-        await asyncio.to_thread(_update_score, row["id"], result)
-        scored += 1
+        for row in instrument_rows:
+            result = _score_candles(row, candles, current)
+            if result is None:
+                created_at = _parse_timestamp(row["created_at"])
+                if not candles and current >= created_at + timedelta(hours=_horizon_hours()):
+                    result = {
+                        "status": "unscorable",
+                        "resolved_at": None,
+                        "resolved_price": None,
+                        "max_favorable": None,
+                        "max_adverse": None,
+                        "scored_at": _iso(current),
+                        "unscorable_reason": "no price history available",
+                    }
+                else:
+                    if not candles:
+                        logger.warning("No forecast history returned for %s; leaving it pending.", instrument)
+                        skipped += 1
+                    pending += 1
+                    continue
+            await asyncio.to_thread(_update_score, row["id"], result)
+            scored += 1
     return {"scored": scored, "pending": pending, "skipped": skipped}
 
 

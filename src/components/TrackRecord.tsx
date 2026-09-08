@@ -83,7 +83,7 @@ const TrackRecord: React.FC = () => {
     <div className="h-full overflow-y-auto p-4 lg:p-6">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-300/70">Measured outcomes</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-300/70">Measured outcomes</p>
           <h1 className="mt-1 text-xl font-semibold text-white">Track Record</h1>
           <p className="mt-1 text-sm text-slate-400">
             Hit rate {formatPercent(stats.hitRate)} · {stats.sample} resolved forecast{stats.sample === 1 ? '' : 's'}
@@ -99,7 +99,7 @@ const TrackRecord: React.FC = () => {
           type="button"
           onClick={() => void refresh()}
           disabled={refreshing}
-          className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-200 transition hover:bg-sky-400/20 disabled:cursor-wait disabled:opacity-60"
+          className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-60"
         >
           {refreshing ? 'Refreshing…' : 'Refresh scores'}
         </button>
@@ -205,7 +205,10 @@ const TrackRecord: React.FC = () => {
                   <td className="px-2 py-2">{forecast.tp1 ?? '—'}</td>
                   <td className="px-2 py-2">{forecast.invalidation ?? '—'}</td>
                   <td className={`px-2 py-2 font-medium ${statusClass[forecast.status] ?? 'text-slate-300'}`}>
-                    {forecast.unscorableReason || forecast.status}
+                    <div>{forecast.status}</div>
+                    {forecast.unscorableReason && (
+                      <div className="text-[10px] font-normal text-slate-500">{forecast.unscorableReason}</div>
+                    )}
                   </td>
                   <td className="px-2 py-2">{formatDate(forecast.resolvedAt)}</td>
                 </tr>
