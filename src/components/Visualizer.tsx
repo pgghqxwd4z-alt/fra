@@ -43,7 +43,7 @@ const MarketResearchSummary: React.FC<{
   return (
     <div className={fullscreen ? 'text-xs text-sky-300/70 font-mono' : 'text-[7px] text-sky-300/70 font-mono'}>
       Research: {research.headlines.length} headlines · {research.biasSignal}
-      {nextEvent && ` · next ${nextEvent.name} ${nextEvent.whenUtc}`}
+      {nextEvent && ` · next ${nextEvent.name} ${nextEvent.whenUtc || 'time TBC'}`}
     </div>
   );
 };
@@ -51,7 +51,7 @@ const MarketResearchSummary: React.FC<{
 const MarketResearchHeadlines: React.FC<{ research: MarketResearch }> = ({ research }) => (
   <div className="mt-2 space-y-1 text-xs text-sky-200/80 font-mono">
     {research.headlines.slice(0, 3).map((headline, index) => {
-      const text = `${headline.impact} · ${headline.publishedAt} · ${headline.title}`;
+      const text = `${headline.impact} · ${headline.publishedAt || 'time unknown'} · ${headline.title}`;
       return headline.url ? (
         <a key={`${headline.url}-${index}`} href={headline.url} target="_blank" rel="noreferrer noopener" className="block hover:text-sky-200 hover:underline">
           {text}

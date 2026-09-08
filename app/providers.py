@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -102,6 +103,25 @@ def _string(value: Any) -> str:
     if isinstance(value, str):
         return value
     return "" if value is None else str(value)
+
+
+def _normalize_utc_time(value: str) -> str:
+    """Full ISO Z when the timestamp parses, date-only when just the date does, else ""."""
+    text = _string(value).strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    else:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        return ""
 
 
 def _string_array(value: Any) -> list[str]:
@@ -382,7 +402,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             mapped = {
                 "title": _string(item.get("title")),
                 "summary": _string(item.get("summary")),
-                "publishedAt": _string(item.get("publishedAt")),
+                "publishedAt": _normalize_utc_time(item.get("publishedAt")),
                 "impact": impact if impact in {"HIGH", "MEDIUM", "LOW"} else "LOW",
             }
             raw_url = _string(item.get("url"))
@@ -410,7 +430,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             events.append(
                 {
                     "name": _string(item.get("name")),
-                    "whenUtc": _string(item.get("whenUtc")),
+                    "whenUtc": _normalize_utc_time(item.get("whenUtc")),
                     "importance": importance if importance in {"HIGH", "MEDIUM", "LOW"} else "MEDIUM",
                 }
             )

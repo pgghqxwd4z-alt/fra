@@ -53,12 +53,12 @@ def _build_research_data(result: dict[str, Any], label: str, as_of: str) -> Rese
     ]
 
     headline_lines = [
-        f"{item.get('impact', 'LOW')} {item.get('publishedAt', '')} {item.get('title', '')}".strip()
+        f"{item.get('impact', 'LOW')} {item.get('publishedAt') or 'time unknown'} {item.get('title', '')}".strip()
         for item in headlines
         if isinstance(item, dict)
     ]
     event_lines = [
-        f"{item.get('importance', 'MEDIUM')} {item.get('whenUtc', '')} {item.get('name', '')}".strip()
+        f"{item.get('importance', 'MEDIUM')} {item.get('whenUtc') or 'time TBC'} {item.get('name', '')}".strip()
         for item in events
         if isinstance(item, dict)
     ]

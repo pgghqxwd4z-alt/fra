@@ -19,6 +19,7 @@ Rules:
 - Prefer primary sources: exchanges, central banks, official statistical releases, major financial newswires.
 - Omit anything you cannot attribute to a real published source; never invent a headline, a URL or a timestamp.
 - Omit anything older than 48 hours.
+- Give each timestamp as a full UTC timestamp YYYY-MM-DDTHH:MM:SSZ when known; when only the date is known return just YYYY-MM-DD; never emit placeholder characters such as ?? inside a timestamp.
 - Every url must be a page you actually retrieved in this session; if you do not have its exact url, set url to an empty string and still return the headline.
 - Mark impact HIGH only for material that plausibly moves price by itself.
 - If nothing qualifies, return empty lists and biasSignal NONE.
