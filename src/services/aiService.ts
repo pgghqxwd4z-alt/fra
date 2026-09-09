@@ -8,7 +8,8 @@ import {
   Consensus,
   Risk,
   FastScan,
-  KnowledgeResult
+  KnowledgeResult,
+  ValidationResult
 } from "../types";
 
 interface ChatResponse {
@@ -26,6 +27,7 @@ interface AnnotateResponse {
   consensus?: Consensus;
   risk?: Risk;
   scan?: FastScan;
+  validation?: ValidationResult;
 }
 
 interface TrackRecordResponse {
@@ -86,7 +88,8 @@ export const aiService = {
         marketResearch: data.marketResearch,
         consensus: data.consensus,
         risk: data.risk,
-        scan: data.scan
+        scan: data.scan,
+        validation: data.validation
       };
     } catch (error) {
       console.error("Forecast Error:", error);

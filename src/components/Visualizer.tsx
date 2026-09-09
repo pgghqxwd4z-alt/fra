@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { Consensus, FastScan, ForecastResult, MarketResearch, MarketVerification, Risk } from '../types';
+import { Consensus, FastScan, ForecastResult, MarketResearch, MarketVerification, Risk, ValidationResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -124,6 +124,47 @@ const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> 
       {consensus.failures.length > 0 && (
         <div className={`mt-2 space-y-1 text-rose-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
           {consensus.failures.map((failure) => <div key={failure.engine}>⚠ {failure.engine}: {failure.error}</div>)}
+        </div>
+      )}
+    </section>
+  );
+};
+
+const ValidationStrip: React.FC<{ validation?: ValidationResult; fullscreen?: boolean }> = ({ validation, fullscreen = false }) => {
+  if (!validation) return null;
+  const badgeClass = {
+    PASS: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+    DOWNGRADE: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+    REJECT: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
+    UNKNOWN: 'border-slate-400/30 bg-slate-400/10 text-slate-300',
+  }[validation.verdict];
+  const findingClass = {
+    VERIFIED: 'text-emerald-300/80',
+    REJECTED: 'text-rose-300',
+    UNVERIFIABLE: 'text-slate-400',
+  } as const;
+  return (
+    <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className="flex items-center justify-between gap-3">
+        <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-sky-300' : 'text-[6px] font-bold uppercase tracking-widest text-sky-300'}>
+          Forecast validation
+        </div>
+        <span className={`rounded-full border px-2 py-0.5 font-mono font-bold ${fullscreen ? 'text-xs' : 'text-[7px]'} ${badgeClass}`}>
+          {validation.verdict}
+        </span>
+      </div>
+      <div className={`mt-2 font-mono text-slate-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+        Validator: {validation.engine} · Chart {validation.chartAgreement}
+        {validation.confidencePenalty > 0 && ` · −${validation.confidencePenalty}% confidence`}
+      </div>
+      {validation.note && <p className={`mt-2 text-slate-400 ${fullscreen ? 'text-sm' : 'text-[7px]'}`}>{validation.note}</p>}
+      {validation.findings.length > 0 && (
+        <div className={`mt-2 space-y-1 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {validation.findings.map((finding, index) => (
+            <div key={`${finding.claim}-${index}`} className={findingClass[finding.ruling]}>
+              {finding.ruling === 'REJECTED' ? '⚠' : '•'} {finding.claim}: {finding.reason}
+            </div>
+          ))}
         </div>
       )}
     </section>
@@ -312,6 +353,7 @@ const Visualizer: React.FC = () => {
   const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
   const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
   const [consensus, setConsensus] = useState<Consensus | null>(null);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [scan, setScan] = useState<FastScan | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
@@ -469,6 +511,7 @@ Focus primarily on the future price path from the current market state.
       setMarketVerification(result.marketVerification || null);
       setMarketResearch(result.marketResearch || null);
       setConsensus(result.consensus || null);
+      setValidation(result.validation || null);
       setScan(result.scan || null);
       setShowOriginal(false);
     } catch (error) {
@@ -658,6 +701,7 @@ Focus primarily on the future price path from the current market state.
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
                 <FastScanLine scan={scan || undefined} />
                 <ConsensusStrip consensus={consensus || undefined} />
+                <ValidationStrip validation={validation || undefined} />
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
@@ -804,6 +848,7 @@ Focus primarily on the future price path from the current market state.
             )}
             <FastScanLine scan={scan || undefined} fullscreen />
             <ConsensusStrip consensus={consensus || undefined} fullscreen />
+            <ValidationStrip validation={validation || undefined} fullscreen />
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>

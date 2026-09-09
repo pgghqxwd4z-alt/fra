@@ -21,6 +21,7 @@ from .prompts import (
     build_retrieval_prompt,
 )
 from .schemas import FORECAST_SCHEMA, KNOWLEDGE_SCHEMA, RESEARCH_SCHEMA, SCAN_SCHEMA, source_for
+from .validator import VALIDATOR_SCHEMA, VALIDATOR_SYSTEM_PROMPT, build_validator_prompt
 
 
 PRIVATE_CITATION_RE = re.compile(
@@ -194,6 +195,41 @@ def normalize_forecast(value: Any) -> dict[str, Any]:
     }
 
 
+def normalize_validator(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    verdict = _string(source.get("verdict"))
+    chart_agreement = _string(source.get("chartAgreement"))
+    try:
+        penalty = int(round(float(source.get("confidencePenalty", 0))))
+    except (TypeError, ValueError):
+        penalty = 0
+    if not math.isfinite(penalty):
+        penalty = 0
+    findings: list[dict[str, str]] = []
+    for item in source.get("findings", []) if isinstance(source.get("findings"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        claim = item.get("claim")
+        reason = item.get("reason")
+        ruling = item.get("ruling")
+        if not isinstance(claim, str) or not isinstance(reason, str) or not isinstance(ruling, str):
+            continue
+        findings.append(
+            {
+                "claim": claim,
+                "ruling": ruling if ruling in {"VERIFIED", "REJECTED", "UNVERIFIABLE"} else "UNVERIFIABLE",
+                "reason": reason,
+            }
+        )
+    return {
+        "verdict": verdict if verdict in {"PASS", "DOWNGRADE", "REJECT"} else "UNKNOWN",
+        "chartAgreement": chart_agreement if chart_agreement in {"MATCH", "DIVERGENT", "UNKNOWN"} else "UNKNOWN",
+        "confidencePenalty": max(0, min(60, penalty)),
+        "findings": findings[:8],
+        "note": _string(source.get("note")),
+    }
+
+
 _GEMINI_SCHEMA_KEYS = {"type", "properties", "required", "items", "enum", "description", "nullable"}
 
 
@@ -210,6 +246,24 @@ def _to_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
             }
         elif key == "items" and isinstance(value, dict):
             converted[key] = _to_gemini_schema(value)
+        else:
+            converted[key] = value
+    return converted
+
+
+def _to_claude_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    converted: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in {"minimum", "maximum", "maxItems"}:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            converted[key] = {
+                property_name: _to_claude_schema(property_schema)
+                for property_name, property_schema in value.items()
+                if isinstance(property_schema, dict)
+            }
+        elif key == "items" and isinstance(value, dict):
+            converted[key] = _to_claude_schema(value)
         else:
             converted[key] = value
     return converted
@@ -459,6 +513,7 @@ class AIProvider:
         schema: dict[str, Any],
         include_schema: bool,
         tools: list[Any] | None = None,
+        system_instruction: str | None = None,
     ) -> Any:
         if self._gemini_schema_supported is not False:
             try:
@@ -469,6 +524,7 @@ class AIProvider:
                         response_mime_type="application/json",
                         response_schema=_to_gemini_schema(schema),
                         tools=tools,
+                        system_instruction=system_instruction,
                     ),
                 )
             except Exception as error:
@@ -484,6 +540,7 @@ class AIProvider:
             config=gemini_types.GenerateContentConfig(
                 response_mime_type="application/json",
                 tools=tools,
+                system_instruction=system_instruction,
             ),
         )
         return response
@@ -940,6 +997,114 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
             "engine": engine_name,
             "model": model,
         }
+
+    async def validate_forecast(
+        self,
+        base64_image: str,
+        forecast: dict[str, Any],
+        lenses: list[str],
+        market_context: str,
+        engine: str,
+    ) -> dict[str, Any]:
+        validator_prompt = build_validator_prompt(forecast, lenses, market_context)
+        if engine == "gemini":
+            client = self._require_gemini()
+            contents = [
+                gemini_types.Part.from_bytes(data=base64.b64decode(base64_image), mime_type="image/png"),
+                validator_prompt,
+            ]
+            result = await self._gemini_json(
+                client,
+                contents,
+                VALIDATOR_SCHEMA,
+                include_schema=True,
+                system_instruction=VALIDATOR_SYSTEM_PROMPT,
+            )
+            text = result.text or ""
+            if not text:
+                raise SafeMessageError("No response text from validator")
+            return normalize_validator(parse_json_object(text))
+        if engine == "claude":
+            client = self._require_claude()
+
+            async def create_claude_message(text_prompt: str) -> Any:
+                return await client.messages.create(
+                    model=self.claude_model,
+                    max_tokens=4096,
+                    system=VALIDATOR_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
+                        {"type": "text", "text": text_prompt},
+                    ]}],
+                    output_config={"format": {"type": "json_schema", "schema": _to_claude_schema(VALIDATOR_SCHEMA)}},
+                )
+
+            message = await create_claude_message(validator_prompt)
+            text = _claude_text(message)
+            if not text:
+                raise SafeMessageError("No response text from validator")
+            if getattr(message, "stop_reason", None) == "max_tokens":
+                _log_claude_truncation(text, "validator initial")
+                raise SafeMessageError("validator response truncated at max_tokens")
+            try:
+                return normalize_validator(parse_json_object(text))
+            except (json.JSONDecodeError, ValueError) as error:
+                _log_claude_json_failure(text, error, "validator initial")
+                retry_message = await create_claude_message(
+                    f"""{validator_prompt}
+
+Return JSON only. Escape all quotes inside string values. Do not include prose outside the JSON object."""
+                )
+                retry_text = _claude_text(retry_message)
+                if not retry_text:
+                    raise SafeMessageError("No response text from validator after retry")
+                if getattr(retry_message, "stop_reason", None) == "max_tokens":
+                    _log_claude_truncation(retry_text, "validator retry")
+                    raise SafeMessageError("validator response truncated at max_tokens")
+                try:
+                    return normalize_validator(parse_json_object(retry_text))
+                except (json.JSONDecodeError, ValueError) as retry_error:
+                    _log_claude_json_failure(retry_text, retry_error, "validator retry")
+                    raise SafeMessageError("validator returned malformed JSON after retry") from retry_error
+        if engine == "groq":
+            client = self._require_openai("groq")
+            result = await client.chat.completions.create(
+                model=self.groq_vision_model,
+                messages=[
+                    {"role": "system", "content": VALIDATOR_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
+                            {"type": "text", "text": validator_prompt},
+                        ],
+                    },
+                ],
+                response_format={"type": "json_object"},
+            )
+            text = result.choices[0].message.content
+            if not text:
+                raise SafeMessageError("No response text from validator")
+            return normalize_validator(parse_json_object(text))
+
+        client = self._require_openai(engine)
+        result = await client.responses.create(
+            model=self.openai_model,
+            instructions=VALIDATOR_SYSTEM_PROMPT,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_image", "image_url": f"data:image/png;base64,{base64_image}", "detail": "auto"},
+                        {"type": "input_text", "text": validator_prompt},
+                    ],
+                }
+            ],
+            text={"format": {"type": "json_schema", "name": "forecast_validator", "strict": True, "schema": VALIDATOR_SCHEMA}},
+        )
+        if not result.output_text:
+            raise SafeMessageError("No response text from validator")
+        return normalize_validator(json.loads(result.output_text))
 
     async def scan(self, base64_image: str, prompt: str, instrument: str | None = None) -> dict[str, Any]:
         client = self._require_openai("groq")

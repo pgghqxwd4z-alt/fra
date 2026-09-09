@@ -22,8 +22,9 @@ from starlette.types import ASGIApp
 
 from .forecast_log import recent, record_forecast, score_pending, stats
 from .library import search_library
+from .lenses import lens_instructions
 from .market import fetch_market_data, resolve_instrument
-from .providers import AIProvider, SafeMessageError
+from .providers import AIProvider, SafeMessageError, normalize_validator
 from .research import fetch_market_research
 from .risk import calculate_risk
 
@@ -175,22 +176,12 @@ def error_response(error: Exception) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=500)
 
 
-def lens_instructions(lenses: list[str]) -> list[str]:
-    instructions: list[str] = []
-    for lens in lenses:
-        if lens == "smc":
-            instructions.append("SMC: Use observable structure. Do not invent BOS, CHoCH, FVG, OB or liquidity levels.")
-        elif lens == "gs":
-            instructions.append("INSTITUTIONAL / MACRO: Use macro/intermarket claims only when supplied or retrieved from legitimate evidence.")
-        elif lens == "psych":
-            instructions.append("PSYCHOLOGY: Apply retrieved probability/discipline principles. Do not claim private positioning as fact.")
-        elif lens == "ppa":
-            instructions.append("PURE PRICE ACTION: Analyze observable swing structure, momentum, rejection, expansion and support/resistance.")
-    return instructions
-
-
 def consensus_enabled() -> bool:
     return os.getenv("CONSENSUS_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def validator_enabled() -> bool:
+    return os.getenv("VALIDATOR_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def groq_scan_enabled() -> bool:
@@ -349,6 +340,35 @@ def apply_consensus_cap(result: dict[str, Any], consensus: dict[str, Any]) -> No
     result["analysis"] = json.dumps(forecast, separators=(",", ":"), ensure_ascii=False)
 
 
+def apply_validation(result: dict[str, Any], validation: dict[str, Any], engine: str) -> dict[str, Any]:
+    normalized = normalize_validator(validation)
+    forecast = result["forecast"]
+    penalty = normalized["confidencePenalty"]
+    try:
+        confidence = int(round(float(forecast.get("confidence", 0))))
+    except (TypeError, ValueError):
+        confidence = 0
+    forecast["confidence"] = max(0, confidence - penalty)
+    warnings = forecast.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+        forecast["warnings"] = warnings
+    warnings.append(f"Forecast validation by {engine}: {normalized['verdict']}.")
+    for finding in normalized["findings"]:
+        if finding["ruling"] == "REJECTED":
+            warnings.append(f"Validation rejected: {finding['claim']} — {finding['reason']}")
+    result["analysis"] = json.dumps(forecast, separators=(",", ":"), ensure_ascii=False)
+    result["validation"] = {
+        "engine": engine,
+        "verdict": normalized["verdict"],
+        "chartAgreement": normalized["chartAgreement"],
+        "confidencePenalty": penalty,
+        "findings": normalized["findings"],
+        "note": normalized["note"],
+    }
+    return normalized
+
+
 @app.post("/api/knowledge/search")
 async def knowledge_search(payload: dict[str, Any]) -> Any:
     try:
@@ -452,6 +472,31 @@ async def annotate(payload: dict[str, Any]) -> Any:
         consensus, result = build_consensus(successes, failures)
         raw_forecasts = [copy.deepcopy(model_result.get("forecast")) for model_result in successes]
         apply_consensus_cap(result, consensus)
+        validation_result: dict[str, Any] | None = None
+        validation_engine: str | None = None
+        if validator_enabled():
+            selected_engine = consensus.get("selectedEngine")
+            available_engines = consensus_engines()
+            if isinstance(selected_engine, str):
+                validation_engine = next(
+                    (engine for engine in available_engines if engine != selected_engine),
+                    selected_engine,
+                )
+                try:
+                    validation_result = apply_validation(
+                        result,
+                        await provider.validate_forecast(
+                            payload.get("base64Image", ""),
+                            result["forecast"],
+                            lenses,
+                            market_context,
+                            validation_engine,
+                        ),
+                        validation_engine,
+                    )
+                except Exception as error:
+                    logger.warning("Forecast validation %s failed: %s", validation_engine, error)
+                    validation_result = None
         if market_data:
             result["marketVerification"] = market_data.verification
         if market_research:
@@ -482,6 +527,15 @@ async def annotate(payload: dict[str, Any]) -> Any:
                 engine = model_result.get("engine")
                 if isinstance(engine, str):
                     forecast_ids_by_engine[engine] = forecast_id
+            if validation_result is not None and validation_engine:
+                await asyncio.to_thread(
+                    record_forecast,
+                    copy.deepcopy(result["forecast"]),
+                    instrument,
+                    market_data.verification if market_data else None,
+                    f"validator:{validation_engine}",
+                    consensus,
+                )
             selected_engine = consensus.get("selectedEngine")
             selected_forecast_id = forecast_ids_by_engine.get(selected_engine)
             if selected_forecast_id:

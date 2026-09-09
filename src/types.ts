@@ -199,6 +199,25 @@ export interface Consensus {
   }[];
 }
 
+export type ValidationVerdict = 'PASS' | 'DOWNGRADE' | 'REJECT' | 'UNKNOWN';
+export type ValidationChartAgreement = 'MATCH' | 'DIVERGENT' | 'UNKNOWN';
+export type ValidationFindingRuling = 'VERIFIED' | 'REJECTED' | 'UNVERIFIABLE';
+
+export interface ValidationFinding {
+  claim: string;
+  ruling: ValidationFindingRuling;
+  reason: string;
+}
+
+export interface ValidationResult {
+  engine: string;
+  verdict: ValidationVerdict;
+  chartAgreement: ValidationChartAgreement;
+  confidencePenalty: number;
+  findings: ValidationFinding[];
+  note: string;
+}
+
 export interface MarketVerification {
   source: 'oanda' | 'twelvedata' | 'yahoo';
   instrument: string;
