@@ -17,6 +17,7 @@ LENS_TAGS = {
     "ppa": {"price-action", "structure", "entry", "target"},
 }
 TOKEN_RE = re.compile(r"[a-z0-9]+")
+PROMPT_STOPWORDS = {"and", "are", "for", "from", "into", "that", "the", "this", "with"}
 
 
 def _tokens(value: str) -> set[str]:
@@ -89,7 +90,8 @@ def search_library(prompt: str, lenses: list[str], limit: int = 4) -> list[dict[
             )
             prompt_matches = len(prompt_tokens & _tokens(searchable))
             score = (tag_matches * 5) + prompt_matches
-            if score <= 0:
+            meaningful_overlap = (prompt_tokens - PROMPT_STOPWORDS) & _tokens(searchable)
+            if tag_matches <= 0 or prompt_matches <= 0 or not meaningful_overlap or score <= 0:
                 continue
             scored.append(
                 (

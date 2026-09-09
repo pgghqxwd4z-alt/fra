@@ -46,7 +46,8 @@ QuantSage can use deterministic, user-supplied knowledge documents from
 section, tags, principle, and application. A prompt is tokenized into lowercase
 alphanumeric words; entries receive a higher-weight score for matches between
 their tags and the selected lens tags, plus a lower-weight score for prompt
-overlap with their tags and text. Only positive-scoring entries are injected,
+overlap with their tags and text. An entry must match both a selected lens tag
+and the prompt to be admitted. Only positive-scoring entries are injected,
 with stable ID tie-breaking and a small result limit.
 
 Library hits are placed before live research items and appended to the forecast

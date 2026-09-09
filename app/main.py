@@ -241,7 +241,15 @@ async def retrieve_knowledge_with_library(
     lenses: list[str],
     market_context: str,
 ) -> dict[str, Any]:
-    knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
+    try:
+        knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
+    except Exception as error:
+        logger.warning("Knowledge retrieval failed; continuing without external knowledge: %s", error)
+        knowledge = {
+            "items": [],
+            "context": "NO EXTERNAL KNOWLEDGE RETRIEVED.",
+            "warnings": [f"Knowledge retrieval failed: {error}"],
+        }
     return merge_local_knowledge(knowledge, prompt, lenses)
 
 
