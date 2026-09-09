@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import re
 from datetime import date, datetime, timezone
@@ -26,6 +27,7 @@ PRIVATE_CITATION_RE = re.compile(
     r"[\uE000-\uF8FF]*cite[\uE000-\uF8FF]*[A-Za-z0-9_-]+[\uE000-\uF8FF]*",
     re.IGNORECASE,
 )
+logger = logging.getLogger("quantsage.providers")
 
 
 def strip_citation_markers(text: str) -> str:
@@ -224,6 +226,28 @@ def parse_json_object(text: str) -> dict[str, Any]:
             raise ValueError("Model returned invalid JSON.") from None
         result = json.loads(match.group(0))
     return result if isinstance(result, dict) else {}
+
+
+def _log_claude_json_failure(text: str, error: Exception, attempt: str) -> None:
+    offset = max(0, min(getattr(error, "pos", 0), len(text)))
+    start = max(0, offset - 150)
+    end = min(len(text), offset + 150)
+    excerpt = text[start:end].replace("\n", "\\n")
+    logger.warning(
+        "Claude %s JSON parse failed at offset %s: %s",
+        attempt,
+        offset,
+        excerpt,
+    )
+
+
+def _log_claude_truncation(text: str, attempt: str) -> None:
+    excerpt = text[max(0, len(text) - 300):].replace("\n", "\\n")
+    logger.warning(
+        "Claude %s response truncated at max_tokens; excerpt: %s",
+        attempt,
+        excerpt,
+    )
 
 
 def object_dict(value: Any) -> Any:
@@ -820,19 +844,45 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             model = self.gemini_model
         elif engine_name == "claude":
             client = self._require_claude()
-            message = await client.messages.create(
-                model=self.claude_model,
-                max_tokens=4096,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                    {"type": "text", "text": augmented_prompt},
-                ]}],
-                output_config={"format": {"type": "json_schema", "schema": FORECAST_SCHEMA}},
-            )
+
+            async def create_claude_message(text_prompt: str) -> Any:
+                return await client.messages.create(
+                    model=self.claude_model,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
+                        {"type": "text", "text": text_prompt},
+                    ]}],
+                    output_config={"format": {"type": "json_schema", "schema": FORECAST_SCHEMA}},
+                )
+
+            message = await create_claude_message(augmented_prompt)
             text = _claude_text(message)
             if not text:
                 raise RuntimeError("No response text from model")
-            forecast = parse_json_object(text)
+
+            if getattr(message, "stop_reason", None) == "max_tokens":
+                _log_claude_truncation(text, "initial")
+                raise RuntimeError("claude response truncated at max_tokens")
+            try:
+                forecast = parse_json_object(text)
+            except (json.JSONDecodeError, ValueError) as error:
+                _log_claude_json_failure(text, error, "initial")
+                retry_prompt = f"""{augmented_prompt}
+
+Return JSON only. Escape all quotes inside string values. Do not include prose outside the JSON object."""
+                retry_message = await create_claude_message(retry_prompt)
+                retry_text = _claude_text(retry_message)
+                if not retry_text:
+                    raise RuntimeError("No response text from model after Claude JSON retry")
+                if getattr(retry_message, "stop_reason", None) == "max_tokens":
+                    _log_claude_truncation(retry_text, "retry")
+                    raise RuntimeError("claude response truncated at max_tokens")
+                try:
+                    forecast = parse_json_object(retry_text)
+                except (json.JSONDecodeError, ValueError) as retry_error:
+                    _log_claude_json_failure(retry_text, retry_error, "retry")
+                    raise RuntimeError("claude returned malformed JSON after retry") from retry_error
             require_forecast_confidence(forecast, engine_name)
             forecast["confidence"] = normalize_forecast(forecast)["confidence"]
             model = self.claude_model
