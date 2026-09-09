@@ -26,7 +26,6 @@ interface AnnotateResponse {
   consensus?: Consensus;
   risk?: Risk;
   scan?: FastScan;
-  knowledge?: KnowledgeResult;
 }
 
 interface TrackRecordResponse {
@@ -87,8 +86,7 @@ export const aiService = {
         marketResearch: data.marketResearch,
         consensus: data.consensus,
         risk: data.risk,
-        scan: data.scan,
-        knowledge: data.knowledge
+        scan: data.scan
       };
     } catch (error) {
       console.error("Forecast Error:", error);

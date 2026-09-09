@@ -38,7 +38,7 @@ export interface KnowledgeItem {
 
 export interface KnowledgeResult {
   items: KnowledgeItem[];
-  context: string;
+  context?: string;
   warnings: string[];
 }
 

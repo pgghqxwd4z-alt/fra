@@ -441,11 +441,6 @@ async def annotate(payload: dict[str, Any]) -> Any:
             result["marketVerification"] = market_data.verification
         if market_research:
             result["marketResearch"] = market_research.metadata
-        if (
-            "LOCAL LIBRARY (user-supplied documents)" in knowledge.get("context", "")
-            and isinstance(result.get("knowledge"), dict)
-        ):
-            result["knowledge"]["context"] = knowledge["context"]
         result["risk"] = calculate_risk(
             result.get("forecast", {}),
             market_data.verification if market_data else None,

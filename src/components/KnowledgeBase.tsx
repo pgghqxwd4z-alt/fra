@@ -1,10 +1,16 @@
-import React from 'react';
+import React, { FormEvent, useState } from 'react';
 import { BOOK_INSIGHTS } from '../constants';
+import { aiService } from '../services/aiService';
 import { KnowledgeItem } from '../types';
 
-interface KnowledgeBaseProps {
-  items?: KnowledgeItem[];
-}
+type KnowledgeLens = 'smc' | 'gs' | 'psych' | 'ppa';
+
+const LENSES: { id: KnowledgeLens; label: string }[] = [
+  { id: 'smc', label: 'SMC' },
+  { id: 'gs', label: 'Institutional' },
+  { id: 'psych', label: 'Psychology' },
+  { id: 'ppa', label: 'Price action' },
+];
 
 const KnowledgeItems: React.FC<{ items: KnowledgeItem[] }> = ({ items }) => {
   if (!items.length) return null;
@@ -37,7 +43,37 @@ const KnowledgeItems: React.FC<{ items: KnowledgeItem[] }> = ({ items }) => {
   );
 };
 
-const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items = [] }) => {
+const KnowledgeBase: React.FC = () => {
+  const [prompt, setPrompt] = useState('');
+  const [lenses, setLenses] = useState<KnowledgeLens[]>(['smc']);
+  const [items, setItems] = useState<KnowledgeItem[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggleLens = (lens: KnowledgeLens) => {
+    setLenses((current) =>
+      current.includes(lens) ? current.filter((value) => value !== lens) : [...current, lens]
+    );
+  };
+
+  const search = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!prompt.trim() || !lenses.length || loading) return;
+    setLoading(true);
+    setSearched(true);
+    setError(null);
+    try {
+      const result = await aiService.searchKnowledge(prompt.trim(), lenses);
+      setItems(result.items);
+    } catch (searchError) {
+      setItems([]);
+      setError(searchError instanceof Error ? searchError.message : 'Knowledge search failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-8 pb-10">
       <div className="mb-12">
@@ -45,7 +81,59 @@ const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items = [] }) => {
         <p className="text-slate-500 text-lg max-w-2xl">Foundational psychology and risk management from the world's most successful traders.</p>
       </div>
 
-      <KnowledgeItems items={items} />
+      <section className="glass-panel rounded-[2rem] p-6 border border-white/10 bg-slate-900/30">
+        <div className="mb-5">
+          <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-widest">Knowledge Search</h3>
+          <p className="text-xs text-slate-500 mt-2">Search live research and local user-supplied principles.</p>
+        </div>
+        <form onSubmit={search} className="space-y-4">
+          <div className="flex flex-col md:flex-row gap-3">
+            <input
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Ask what the library says about…"
+              className="flex-1 bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+            />
+            <button
+              type="submit"
+              disabled={!prompt.trim() || !lenses.length || loading}
+              className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-bold px-5 py-3 rounded-xl text-xs uppercase tracking-widest transition-colors"
+            >
+              {loading ? 'Searching…' : 'Search'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {LENSES.map((lens) => {
+              const active = lenses.includes(lens.id);
+              return (
+                <button
+                  key={lens.id}
+                  type="button"
+                  onClick={() => toggleLens(lens.id)}
+                  className={`px-3 py-1.5 rounded-full border text-[10px] uppercase tracking-widest transition-colors ${
+                    active
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                      : 'border-white/10 bg-black/20 text-slate-500 hover:text-white'
+                  }`}
+                >
+                  {lens.label}
+                </button>
+              );
+            })}
+          </div>
+        </form>
+        <div className="mt-5">
+          {loading && <p className="text-xs text-slate-500">Searching knowledge sources…</p>}
+          {!loading && error && <p className="text-xs text-rose-400">{error}</p>}
+          {!loading && !error && !searched && (
+            <p className="text-xs text-slate-500">No query yet. Search for a principle or setup.</p>
+          )}
+          {!loading && !error && searched && !items.length && (
+            <p className="text-xs text-slate-500">No matching principles found.</p>
+          )}
+          {!loading && !error && <KnowledgeItems items={items} />}
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {BOOK_INSIGHTS.map((book, i) => (
