@@ -436,7 +436,14 @@ async def annotate(payload: dict[str, Any]) -> Any:
         for engine, attempt in zip(engines, attempts):
             if isinstance(attempt, Exception):
                 logger.warning("Consensus %s annotation failed: %s", engine, attempt)
-                failures.append({"engine": engine, "error": str(attempt)})
+                failures.append(
+                    {
+                        "engine": engine,
+                        "error": str(attempt)
+                        if isinstance(attempt, SafeMessageError)
+                        else f"{engine} request failed",
+                    }
+                )
             else:
                 successes.append(attempt)
         if not successes:
