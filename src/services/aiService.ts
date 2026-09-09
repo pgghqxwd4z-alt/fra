@@ -7,7 +7,8 @@ import {
   ForecastStats,
   Consensus,
   Risk,
-  FastScan
+  FastScan,
+  KnowledgeResult
 } from "../types";
 
 interface ChatResponse {
@@ -25,6 +26,7 @@ interface AnnotateResponse {
   consensus?: Consensus;
   risk?: Risk;
   scan?: FastScan;
+  knowledge?: KnowledgeResult;
 }
 
 interface TrackRecordResponse {
@@ -85,12 +87,29 @@ export const aiService = {
         marketResearch: data.marketResearch,
         consensus: data.consensus,
         risk: data.risk,
-        scan: data.scan
+        scan: data.scan,
+        knowledge: data.knowledge
       };
     } catch (error) {
       console.error("Forecast Error:", error);
       throw error;
     }
+  },
+
+  async searchKnowledge(
+    prompt: string,
+    lenses: string[] = ['smc'],
+    marketContext = ''
+  ): Promise<KnowledgeResult> {
+    const response = await fetch("/api/knowledge/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, lenses, marketContext })
+    });
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to search knowledge");
+    }
+    return response.json();
   },
 
   async chatWithGrounding(

@@ -26,6 +26,7 @@ KNOWLEDGE_SOURCES = [
         "allowedDomains": ["wiley.com", "wiley-vch.de", "books.google.com"],
     },
     {"id": "smc", "title": "Smart Money Concepts", "kind": "FRAMEWORK"},
+    {"id": "smc-pdf", "title": "Smart Money Concept Trading Strategy", "kind": "DOCUMENT"},
     {"id": "pure-price-action", "title": "Pure Price Action", "kind": "FRAMEWORK"},
     {"id": "institutional-overlay", "title": "Institutional / Macro Overlay", "kind": "FRAMEWORK"},
 ]

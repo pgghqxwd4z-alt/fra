@@ -21,6 +21,7 @@ from starlette.status import HTTP_401_UNAUTHORIZED
 from starlette.types import ASGIApp
 
 from .forecast_log import recent, record_forecast, score_pending, stats
+from .library import search_library
 from .market import fetch_market_data, resolve_instrument
 from .providers import AIProvider
 from .research import fetch_market_research
@@ -196,6 +197,54 @@ def groq_scan_enabled() -> bool:
     return os.getenv("GROQ_SCAN_ENABLED", "").strip().lower() not in {"", "0", "false", "no"}
 
 
+def merge_local_knowledge(knowledge: dict[str, Any], prompt: str, lenses: list[str]) -> dict[str, Any]:
+    try:
+        hits = search_library(prompt, lenses)
+    except Exception as error:
+        logger.warning("Local knowledge search failed: %s", error)
+        return knowledge
+    if not hits:
+        return knowledge
+
+    local_items = [
+        {
+            "sourceId": hit["sourceId"],
+            "sourceTitle": hit["title"],
+            "kind": hit["kind"],
+            "principle": hit["principle"],
+            "relevance": hit["application"],
+            "isLocal": True,
+        }
+        for hit in hits
+    ]
+    local_context = "\n\n".join(
+        f"{index}. {hit['title']}\n"
+        f"Section: {hit['section']}\n"
+        f"Principle: {hit['principle']}\n"
+        f"Relevance: {hit['application']}\n"
+        "Source: local document"
+        for index, hit in enumerate(hits, start=1)
+    )
+    merged = dict(knowledge)
+    merged["items"] = local_items + list(knowledge.get("items", []))
+    existing_context = knowledge.get("context", "")
+    merged["context"] = (
+        f"{existing_context}\n\nLOCAL LIBRARY (user-supplied documents)\n{local_context}"
+        if existing_context
+        else f"LOCAL LIBRARY (user-supplied documents)\n{local_context}"
+    )
+    return merged
+
+
+async def retrieve_knowledge_with_library(
+    prompt: str,
+    lenses: list[str],
+    market_context: str,
+) -> dict[str, Any]:
+    knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
+    return merge_local_knowledge(knowledge, prompt, lenses)
+
+
 def consensus_engines() -> list[str]:
     configured = [value.strip().lower() for value in os.getenv("CONSENSUS_ENGINES", "openai,claude,gemini").split(",")]
     engines: list[str] = []
@@ -298,7 +347,7 @@ async def knowledge_search(payload: dict[str, Any]) -> Any:
         prompt = payload.get("prompt", "")
         lenses = payload.get("lenses", ["smc"])
         market_context = payload.get("marketContext", "")
-        return await provider.retrieve_knowledge(prompt, lenses, market_context)
+        return await retrieve_knowledge_with_library(prompt, lenses, market_context)
     except Exception as error:
         logger.exception("Knowledge Retrieval Error:")
         return error_response(error)
@@ -336,7 +385,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
             market_research.context if market_research else "",
         ]
         market_context = "\n\n".join(part for part in context_parts if part)
-        knowledge = await provider.retrieve_knowledge(prompt, lenses, market_context)
+        knowledge = await retrieve_knowledge_with_library(prompt, lenses, market_context)
         instructions = "\n".join(lens_instructions(lenses))
         engines = consensus_engines()
         use_consensus = consensus_enabled() and len(engines) >= 2
@@ -392,6 +441,11 @@ async def annotate(payload: dict[str, Any]) -> Any:
             result["marketVerification"] = market_data.verification
         if market_research:
             result["marketResearch"] = market_research.metadata
+        if (
+            "LOCAL LIBRARY (user-supplied documents)" in knowledge.get("context", "")
+            and isinstance(result.get("knowledge"), dict)
+        ):
+            result["knowledge"]["context"] = knowledge["context"]
         result["risk"] = calculate_risk(
             result.get("forecast", {}),
             market_data.verification if market_data else None,

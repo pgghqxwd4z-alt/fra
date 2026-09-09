@@ -1,13 +1,51 @@
 import React from 'react';
 import { BOOK_INSIGHTS } from '../constants';
+import { KnowledgeItem } from '../types';
 
-const KnowledgeBase: React.FC = () => {
+interface KnowledgeBaseProps {
+  items?: KnowledgeItem[];
+}
+
+const KnowledgeItems: React.FC<{ items: KnowledgeItem[] }> = ({ items }) => {
+  if (!items.length) return null;
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <article key={`${item.sourceId}-${item.principle}`} className="glass-panel rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-2">
+            <h3 className="text-sm font-semibold text-white">{item.sourceTitle}</h3>
+            {item.isLocal ? (
+              <span className="text-[9px] uppercase tracking-widest text-amber-300/80 border border-amber-300/20 rounded px-1.5 py-0.5">
+                local document
+              </span>
+            ) : item.sourceUrl ? (
+              <a
+                href={item.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[9px] uppercase tracking-widest text-sky-300/80 hover:text-sky-200"
+              >
+                source
+              </a>
+            ) : null}
+          </div>
+          <p className="text-sm text-slate-300">{item.principle}</p>
+          <p className="text-xs text-slate-500 mt-2">{item.relevance}</p>
+        </article>
+      ))}
+    </div>
+  );
+};
+
+const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({ items = [] }) => {
   return (
     <div className="space-y-8 pb-10">
       <div className="mb-12">
         <h2 className="text-4xl font-bold text-white mb-3 tracking-tighter">Wisdom Vault</h2>
         <p className="text-slate-500 text-lg max-w-2xl">Foundational psychology and risk management from the world's most successful traders.</p>
       </div>
+
+      <KnowledgeItems items={items} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {BOOK_INSIGHTS.map((book, i) => (

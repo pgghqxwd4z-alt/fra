@@ -39,6 +39,25 @@ only after verifying `GROQ_API_KEY`. It is a preliminary, non-gating chart read
 that runs outside the forecast vote, is excluded from consensus, and is not
 scored.
 
+### Local knowledge library
+
+QuantSage can use deterministic, user-supplied knowledge documents from
+`app/library/*.json`. Each document contains metadata and entries with an ID,
+section, tags, principle, and application. A prompt is tokenized into lowercase
+alphanumeric words; entries receive a higher-weight score for matches between
+their tags and the selected lens tags, plus a lower-weight score for prompt
+overlap with their tags and text. Only positive-scoring entries are injected,
+with stable ID tie-breaking and a small result limit.
+
+Library hits are placed before live research items and appended to the forecast
+knowledge context under a `LOCAL LIBRARY (user-supplied documents)` heading.
+They provide context only: they never override live research or the verified
+price feed, and they do not change consensus or risk calculations. To add a
+document, drop another JSON file with the same shape into `app/library/` and
+register its source in `KNOWLEDGE_SOURCES` in `app/schemas.py`. The original
+PDF is intentionally not committed; the checked-in entries are condensed
+paraphrases authored from that document.
+
 ```sh
 npm install
 uv sync

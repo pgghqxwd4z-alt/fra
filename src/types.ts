@@ -24,6 +24,24 @@ export interface GroundingChunk {
   };
 }
 
+export interface KnowledgeItem {
+  sourceId: string;
+  sourceTitle: string;
+  kind: string;
+  principle: string;
+  relevance: string;
+  sourceUrl?: string;
+  sourceTitleFromWeb?: string;
+  confidence?: number;
+  isLocal?: boolean;
+}
+
+export interface KnowledgeResult {
+  items: KnowledgeItem[];
+  context: string;
+  warnings: string[];
+}
+
 export interface TradingStrategy {
   id: string;
   name: string;
