@@ -199,7 +199,7 @@ export interface Consensus {
   }[];
 }
 
-export type ValidationVerdict = 'PASS' | 'DOWNGRADE' | 'REJECT' | 'UNKNOWN';
+export type ValidationVerdict = 'PASS' | 'DOWNGRADE' | 'REJECT';
 export type ValidationChartAgreement = 'MATCH' | 'DIVERGENT' | 'UNKNOWN';
 export type ValidationFindingRuling = 'VERIFIED' | 'REJECTED' | 'UNVERIFIABLE';
 

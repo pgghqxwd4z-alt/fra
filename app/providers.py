@@ -200,11 +200,13 @@ def normalize_validator(value: Any) -> dict[str, Any]:
     verdict = _string(source.get("verdict"))
     chart_agreement = _string(source.get("chartAgreement"))
     try:
-        penalty = int(round(float(source.get("confidencePenalty", 0))))
+        penalty_value = float(source.get("confidencePenalty", 0))
     except (TypeError, ValueError):
-        penalty = 0
-    if not math.isfinite(penalty):
-        penalty = 0
+        penalty_value = 0
+    penalty = int(round(penalty_value)) if math.isfinite(penalty_value) else 0
+    if verdict not in {"PASS", "DOWNGRADE", "REJECT"}:
+        logger.warning("Validator returned unrecognized verdict %r; treating it as DOWNGRADE", verdict)
+        verdict = "DOWNGRADE"
     findings: list[dict[str, str]] = []
     for item in source.get("findings", []) if isinstance(source.get("findings"), list) else []:
         if not isinstance(item, dict):
@@ -222,7 +224,7 @@ def normalize_validator(value: Any) -> dict[str, Any]:
             }
         )
     return {
-        "verdict": verdict if verdict in {"PASS", "DOWNGRADE", "REJECT"} else "UNKNOWN",
+        "verdict": verdict,
         "chartAgreement": chart_agreement if chart_agreement in {"MATCH", "DIVERGENT", "UNKNOWN"} else "UNKNOWN",
         "confidencePenalty": max(0, min(60, penalty)),
         "findings": findings[:8],

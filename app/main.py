@@ -528,9 +528,14 @@ async def annotate(payload: dict[str, Any]) -> Any:
                 if isinstance(engine, str):
                     forecast_ids_by_engine[engine] = forecast_id
             if validation_result is not None and validation_engine:
+                validated_forecast = copy.deepcopy(result["forecast"])
+                if validation_result["verdict"] == "REJECT":
+                    entry = validated_forecast.get("entry")
+                    if isinstance(entry, dict):
+                        entry["direction"] = "WAIT"
                 await asyncio.to_thread(
                     record_forecast,
-                    copy.deepcopy(result["forecast"]),
+                    validated_forecast,
                     instrument,
                     market_data.verification if market_data else None,
                     f"validator:{validation_engine}",
