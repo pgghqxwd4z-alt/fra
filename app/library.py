@@ -17,7 +17,6 @@ LENS_TAGS = {
     "ppa": {"price-action", "structure", "entry", "target"},
 }
 TOKEN_RE = re.compile(r"[a-z0-9]+")
-PROMPT_STOPWORDS = {"and", "are", "for", "from", "into", "that", "the", "this", "with"}
 
 
 def _tokens(value: str) -> set[str]:
@@ -66,6 +65,33 @@ def _load_library() -> tuple[dict[str, Any], ...]:
 _DOCUMENTS = _load_library()
 
 
+def _searchable_text(entry: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            *entry["tags"],
+            entry["section"],
+            entry["principle"],
+            entry["application"],
+        ]
+    )
+
+
+def _document_frequencies(
+    documents: tuple[dict[str, Any], ...],
+) -> tuple[dict[str, int], int]:
+    frequencies: dict[str, int] = {}
+    total_entries = 0
+    for document in documents:
+        for entry in document["entries"]:
+            total_entries += 1
+            for token in _tokens(_searchable_text(entry)):
+                frequencies[token] = frequencies.get(token, 0) + 1
+    return frequencies, total_entries
+
+
+_DOCUMENT_FREQUENCIES, _TOTAL_ENTRIES = _document_frequencies(_DOCUMENTS)
+
+
 def search_library(prompt: str, lenses: list[str], limit: int = 4) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
@@ -80,18 +106,15 @@ def search_library(prompt: str, lenses: list[str], limit: int = 4) -> list[dict[
         for entry in document["entries"]:
             tags = {tag.strip().lower() for tag in entry["tags"]}
             tag_matches = len(tags & lens_tags)
-            searchable = " ".join(
-                [
-                    *entry["tags"],
-                    entry["section"],
-                    entry["principle"],
-                    entry["application"],
-                ]
+            searchable_tokens = _tokens(_searchable_text(entry))
+            prompt_matches = sum(
+                1
+                for token in prompt_tokens & searchable_tokens
+                if _TOTAL_ENTRIES == 1
+                or _DOCUMENT_FREQUENCIES.get(token, 0) * 2 <= _TOTAL_ENTRIES
             )
-            prompt_matches = len(prompt_tokens & _tokens(searchable))
             score = (tag_matches * 5) + prompt_matches
-            meaningful_overlap = (prompt_tokens - PROMPT_STOPWORDS) & _tokens(searchable)
-            if tag_matches <= 0 or prompt_matches <= 0 or not meaningful_overlap or score <= 0:
+            if tag_matches <= 0 or prompt_matches <= 0 or score <= 0:
                 continue
             scored.append(
                 (

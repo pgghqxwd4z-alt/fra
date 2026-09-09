@@ -45,10 +45,12 @@ QuantSage can use deterministic, user-supplied knowledge documents from
 `app/library/*.json`. Each document contains metadata and entries with an ID,
 section, tags, principle, and application. A prompt is tokenized into lowercase
 alphanumeric words; entries receive a higher-weight score for matches between
-their tags and the selected lens tags, plus a lower-weight score for prompt
-overlap with their tags and text. An entry must match both a selected lens tag
-and the prompt to be admitted. Only positive-scoring entries are injected,
-with stable ID tie-breaking and a small result limit.
+their tags and the selected lens tags, plus a lower-weight score for distinctive
+prompt-token overlap with their tags and text. A prompt token is distinctive
+when it appears in at most half of the loaded entries (or every token is
+distinctive in a one-entry corpus). An entry must match both a selected lens
+tag and a distinctive prompt token to be admitted. Only positive-scoring
+entries are injected, with stable ID tie-breaking and a small result limit.
 
 Library hits are placed before live research items and appended to the forecast
 knowledge context under a `LOCAL LIBRARY (user-supplied documents)` heading.

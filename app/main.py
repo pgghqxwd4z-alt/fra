@@ -23,7 +23,7 @@ from starlette.types import ASGIApp
 from .forecast_log import recent, record_forecast, score_pending, stats
 from .library import search_library
 from .market import fetch_market_data, resolve_instrument
-from .providers import AIProvider
+from .providers import AIProvider, SafeMessageError
 from .research import fetch_market_research
 from .risk import calculate_risk
 
@@ -171,7 +171,7 @@ provider = AIProvider()
 
 
 def error_response(error: Exception) -> JSONResponse:
-    message = str(error) or "AI request failed"
+    message = str(error) if isinstance(error, SafeMessageError) else "AI request failed."
     return JSONResponse({"error": message}, status_code=500)
 
 
@@ -248,7 +248,7 @@ async def retrieve_knowledge_with_library(
         knowledge = {
             "items": [],
             "context": "NO EXTERNAL KNOWLEDGE RETRIEVED.",
-            "warnings": [f"Knowledge retrieval failed: {error}"],
+            "warnings": ["External knowledge retrieval unavailable; using local library only."],
         }
     return merge_local_knowledge(knowledge, prompt, lenses)
 

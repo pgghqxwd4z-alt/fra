@@ -30,6 +30,10 @@ PRIVATE_CITATION_RE = re.compile(
 logger = logging.getLogger("quantsage.providers")
 
 
+class SafeMessageError(RuntimeError):
+    """An application error safe to expose to API clients."""
+
+
 def strip_citation_markers(text: str) -> str:
     return PRIVATE_CITATION_RE.sub(
         lambda match: "" if re.search(r"[\uE000-\uF8FF]", match.group(0)) else match.group(0),
@@ -214,7 +218,7 @@ def _to_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
 def require_forecast_confidence(forecast: dict[str, Any], engine: str) -> None:
     confidence = forecast.get("confidence")
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
-        raise RuntimeError(f"{engine} omitted confidence")
+        raise SafeMessageError(f"{engine} omitted confidence")
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -422,25 +426,25 @@ class AIProvider:
     def _require_openai(self, engine: str) -> AsyncOpenAI:
         client = self._clients.get(engine)
         if not isinstance(client, AsyncOpenAI):
-            raise RuntimeError(self.missing_key_message_for(engine))
+            raise SafeMessageError(self.missing_key_message_for(engine))
         return client
 
     def _require_claude(self) -> AsyncAnthropic:
         client = self._clients.get("claude")
         if not isinstance(client, AsyncAnthropic):
-            raise RuntimeError(self.missing_key_message_for("claude"))
+            raise SafeMessageError(self.missing_key_message_for("claude"))
         return client
 
     def _require_gemini(self) -> genai.Client:
         client = self._clients.get("gemini")
         if not isinstance(client, genai.Client):
-            raise RuntimeError(self.missing_key_message_for("gemini"))
+            raise SafeMessageError(self.missing_key_message_for("gemini"))
         return client
 
     def require_client(self) -> AsyncOpenAI | AsyncAnthropic | genai.Client:
         client = self._clients.get(self.name)
         if client is None:
-            raise RuntimeError(self.missing_key_message)
+            raise SafeMessageError(self.missing_key_message)
         return client
 
     @staticmethod
@@ -739,7 +743,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             )
             text = result.text or ""
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             return self.map_research_result(parse_json_object(text), map_gemini_grounding(search))
         if engine_name == "claude":
             client = self._require_claude()
@@ -768,7 +772,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             )
             text = _claude_text(result)
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             return self.map_research_result(parse_json_object(text), map_claude_grounding(search_result))
         client = self._require_openai(engine_name)
         if engine_name == "groq":
@@ -779,7 +783,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             )
             text = result.choices[0].message.content
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             return self.map_research_result(parse_json_object(text), map_groq_grounding(result))
 
         search_result = await client.responses.create(
@@ -806,7 +810,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             },
         )
         if not result.output_text:
-            raise RuntimeError("No response text from model")
+            raise SafeMessageError("No response text from model")
         return self.map_research_result(json.loads(result.output_text), map_openai_grounding(search_result))
 
     async def annotate(
@@ -837,7 +841,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             result = await self._gemini_json(client, contents, FORECAST_SCHEMA, include_schema=True)
             text = result.text or ""
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             raw_forecast = parse_json_object(text)
             require_forecast_confidence(raw_forecast, engine_name)
             forecast = normalize_forecast(raw_forecast)
@@ -859,11 +863,11 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             message = await create_claude_message(augmented_prompt)
             text = _claude_text(message)
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
 
             if getattr(message, "stop_reason", None) == "max_tokens":
                 _log_claude_truncation(text, "initial")
-                raise RuntimeError("claude response truncated at max_tokens")
+                raise SafeMessageError("claude response truncated at max_tokens")
             try:
                 forecast = parse_json_object(text)
             except (json.JSONDecodeError, ValueError) as error:
@@ -874,15 +878,15 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
                 retry_message = await create_claude_message(retry_prompt)
                 retry_text = _claude_text(retry_message)
                 if not retry_text:
-                    raise RuntimeError("No response text from model after Claude JSON retry")
+                    raise SafeMessageError("No response text from model after Claude JSON retry")
                 if getattr(retry_message, "stop_reason", None) == "max_tokens":
                     _log_claude_truncation(retry_text, "retry")
-                    raise RuntimeError("claude response truncated at max_tokens")
+                    raise SafeMessageError("claude response truncated at max_tokens")
                 try:
                     forecast = parse_json_object(retry_text)
                 except (json.JSONDecodeError, ValueError) as retry_error:
                     _log_claude_json_failure(retry_text, retry_error, "retry")
-                    raise RuntimeError("claude returned malformed JSON after retry") from retry_error
+                    raise SafeMessageError("claude returned malformed JSON after retry") from retry_error
             require_forecast_confidence(forecast, engine_name)
             forecast["confidence"] = normalize_forecast(forecast)["confidence"]
             model = self.claude_model
@@ -903,7 +907,7 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
             )
             text = result.choices[0].message.content
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             raw_forecast = parse_json_object(text)
             require_forecast_confidence(raw_forecast, engine_name)
             forecast = normalize_forecast(raw_forecast)
@@ -924,7 +928,7 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
                 text={"format": {"type": "json_schema", "name": "forecast", "strict": True, "schema": FORECAST_SCHEMA}},
             )
             if not result.output_text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             forecast = json.loads(result.output_text)
             require_forecast_confidence(forecast, engine_name)
             forecast["confidence"] = normalize_forecast(forecast)["confidence"]
@@ -965,17 +969,17 @@ Return ONLY valid JSON matching this schema:
         )
         text = result.choices[0].message.content
         if not text:
-            raise RuntimeError("No response text from Groq scan")
+            raise SafeMessageError("No response text from Groq scan")
         raw_scan = parse_json_object(text)
         bias = raw_scan.get("bias")
         key_levels = raw_scan.get("keyLevels")
         note = raw_scan.get("note")
         if bias not in {"BULLISH", "BEARISH", "NEUTRAL"}:
-            raise RuntimeError("Groq scan returned invalid bias")
+            raise SafeMessageError("Groq scan returned invalid bias")
         if not isinstance(key_levels, list) or any(not isinstance(level, str) for level in key_levels):
-            raise RuntimeError("Groq scan returned invalid key levels")
+            raise SafeMessageError("Groq scan returned invalid key levels")
         if not isinstance(note, str) or not note.strip():
-            raise RuntimeError("Groq scan returned invalid note")
+            raise SafeMessageError("Groq scan returned invalid note")
         return {
             "bias": bias,
             "keyLevels": [level.strip() for level in key_levels[:4]],
@@ -1005,7 +1009,7 @@ Return ONLY valid JSON matching this schema:
             result = await chat.send_message(prompt)
             text = result.text or ""
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             return {"text": strip_citation_markers(text), "grounding": map_gemini_grounding(result)}
         if engine_name == "claude":
             client = self._require_claude()
@@ -1040,7 +1044,7 @@ Return ONLY valid JSON matching this schema:
             result = await client.chat.completions.create(model=self.groq_model, messages=messages)
             text = result.choices[0].message.content
             if not text:
-                raise RuntimeError("No response text from model")
+                raise SafeMessageError("No response text from model")
             return {"text": strip_citation_markers(text), "grounding": map_groq_grounding(result)}
 
         input_items = []
