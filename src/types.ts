@@ -109,6 +109,24 @@ export interface ForecastTargets {
   final: string;
 }
 
+export interface StructuralEvidence {
+  id: string;
+  type: 'ORDER_BLOCK' | 'FVG' | 'LIQUIDITY' | 'SUPPORT_RESISTANCE' | 'STRUCTURE' | 'VOID' | 'OTHER';
+  level: string;
+  basis: string;
+}
+
+export interface ForecastCitations {
+  bias: string[];
+  liquidityTarget: string[];
+  retracement: string[];
+  entry: string[];
+  invalidation: string[];
+  tp1: string[];
+  tp2: string[];
+  final: string[];
+}
+
 export interface ForecastResult {
   currentState: string;
 
@@ -136,7 +154,11 @@ export interface ForecastResult {
 
   nextEvent: string;
 
-  structuralEvidence: string[];
+  structuralEvidence: StructuralEvidence[];
+
+  citations: ForecastCitations;
+
+  unsupported?: string[];
 
   warnings: string[];
 

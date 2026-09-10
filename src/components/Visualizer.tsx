@@ -237,8 +237,14 @@ const ForecastDetails: React.FC<{
     nonEmpty(forecast.retracement?.zone),
     nonEmpty(forecast.retracement?.reason),
   ].filter(Boolean).join(' · ');
-  const evidence = (forecast.structuralEvidence || []).map(nonEmpty).filter(Boolean) as string[];
-  const warnings = (forecast.warnings || []).map(nonEmpty).filter(Boolean) as string[];
+  const evidence = (forecast.structuralEvidence || []).filter((item) => item?.id?.trim()).map((item) => (
+    `${item.id} · ${item.type} ${item.level} — ${item.basis}`
+  ));
+  const unsupported = (forecast.unsupported || []).map(nonEmpty).filter(Boolean) as string[];
+  const unsupportedSet = new Set(unsupported);
+  const warnings = (forecast.warnings || [])
+    .map(nonEmpty)
+    .filter((warning): warning is string => Boolean(warning) && !unsupportedSet.has(warning));
 
   const Field: React.FC<{ label: string; value: string | null }> = ({ label, value }) => {
     if (!value) return null;
@@ -326,6 +332,14 @@ const ForecastDetails: React.FC<{
         <section className={compact ? 'space-y-1' : 'space-y-2'}>
           {warnings.map((warning, index) => (
             <div key={index} className="text-[8px] text-rose-400/80">⚠ {warning}</div>
+          ))}
+        </section>
+      )}
+
+      {unsupported.length > 0 && (
+        <section className={compact ? 'space-y-1' : 'space-y-2'}>
+          {unsupported.map((warning, index) => (
+            <div key={index} className="text-[8px] text-amber-300/90">⚠ {warning}</div>
           ))}
         </section>
       )}

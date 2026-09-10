@@ -159,6 +159,50 @@ def normalize_forecast(value: Any) -> dict[str, Any]:
     if not math.isfinite(raw_confidence):
         raw_confidence = 0
     confidence = round(max(0, min(100, raw_confidence * 100 if raw_confidence <= 1 else raw_confidence)))
+    evidence: list[dict[str, str]] = []
+    seen_evidence_ids: set[str] = set()
+    evidence_types = {
+        "ORDER_BLOCK",
+        "FVG",
+        "LIQUIDITY",
+        "SUPPORT_RESISTANCE",
+        "STRUCTURE",
+        "VOID",
+        "OTHER",
+    }
+    for item in source.get("structuralEvidence", []) if isinstance(source.get("structuralEvidence"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = _string(item.get("id")).strip()
+        if not evidence_id or evidence_id in seen_evidence_ids:
+            continue
+        seen_evidence_ids.add(evidence_id)
+        evidence_type = _string(item.get("type")).strip()
+        evidence.append(
+            {
+                "id": evidence_id,
+                "type": evidence_type if evidence_type in evidence_types else "OTHER",
+                "level": _string(item.get("level")),
+                "basis": _string(item.get("basis")),
+            }
+        )
+    citation_keys = (
+        "bias",
+        "liquidityTarget",
+        "retracement",
+        "entry",
+        "invalidation",
+        "tp1",
+        "tp2",
+        "final",
+    )
+    raw_citations = source.get("citations")
+    citations = {
+        key: _string_array(raw_citations.get(key))
+        if isinstance(raw_citations, dict)
+        else []
+        for key in citation_keys
+    }
 
     return {
         "currentState": _string(source.get("currentState")),
@@ -190,7 +234,9 @@ def normalize_forecast(value: Any) -> dict[str, Any]:
         "primaryScenario": _string(source.get("primaryScenario")),
         "alternativeScenario": _string(source.get("alternativeScenario")),
         "nextEvent": _string(source.get("nextEvent")),
-        "structuralEvidence": _string_array(source.get("structuralEvidence")),
+        "structuralEvidence": evidence,
+        "citations": citations,
+        "unsupported": [],
         "warnings": _string_array(source.get("warnings")),
     }
 
@@ -947,7 +993,7 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
                     _log_claude_json_failure(retry_text, retry_error, "retry")
                     raise SafeMessageError("claude returned malformed JSON after retry") from retry_error
             require_forecast_confidence(forecast, engine_name)
-            forecast["confidence"] = normalize_forecast(forecast)["confidence"]
+            forecast = normalize_forecast(forecast)
             model = self.claude_model
         elif engine_name == "groq":
             client = self._require_openai(engine_name)
@@ -990,7 +1036,7 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
                 raise SafeMessageError("No response text from model")
             forecast = json.loads(result.output_text)
             require_forecast_confidence(forecast, engine_name)
-            forecast["confidence"] = normalize_forecast(forecast)["confidence"]
+            forecast = normalize_forecast(forecast)
             model = self.openai_model
         return {
             "analysis": json.dumps(forecast, separators=(",", ":"), ensure_ascii=False),

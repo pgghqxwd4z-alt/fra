@@ -21,6 +21,7 @@ from starlette.status import HTTP_401_UNAUTHORIZED
 from starlette.types import ASGIApp
 
 from .forecast_log import recent, record_forecast, score_pending, stats
+from .citations import check_citations
 from .library import search_library
 from .lenses import lens_instructions
 from .market import fetch_market_data, resolve_instrument
@@ -471,6 +472,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
                     }
                 )
             else:
+                check_citations(attempt["forecast"])
                 successes.append(attempt)
         if not successes:
             first_failure = next((attempt for attempt in attempts if isinstance(attempt, Exception)), RuntimeError("AI request failed"))
@@ -495,8 +497,21 @@ async def annotate(payload: dict[str, Any]) -> Any:
             }
             configured_engines = consensus_engines()
             if isinstance(selected_engine, str):
+                preferred_validator = os.getenv("VALIDATOR_ENGINE", "claude").strip().lower()
+                preferred_candidates = (
+                    [preferred_validator]
+                    if preferred_validator in {"openai", "groq", "claude", "gemini"}
+                    and provider.has_engine(preferred_validator)
+                    and preferred_validator != selected_engine
+                    and preferred_validator not in failed_engines
+                    else []
+                )
                 validation_engine = next(
-                    (engine for engine in successful_engines if engine != selected_engine),
+                    (
+                        engine
+                        for engine in [*preferred_candidates, *successful_engines]
+                        if engine != selected_engine and engine not in failed_engines
+                    ),
                     None,
                 )
                 if validation_engine:

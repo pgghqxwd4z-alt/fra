@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 VALIDATOR_SCHEMA: dict[str, Any] = {
@@ -65,6 +66,7 @@ Hard limits on what you may do:
 - You may only ever LOWER confidence, via confidencePenalty (0 means no penalty). You may never raise it.
 - Judge only what the chart and the supplied data can actually show. A claim you cannot check from the image or the data is UNVERIFIABLE — that is not a failure, and it must not be scored as one.
 - Absence of evidence for a claim is not evidence against it. Do not reject a claim merely because the chart is ambiguous.
+- A forecast element whose cited footprint is not visible on the chart is REJECTED. A populated forecast element with no citation is also REJECTED; the rejection reason must name the unsupported element. You may not propose or correct levels.
 
 Rulings:
 - VERIFIED: the chart or the supplied data supports the claim as stated.
@@ -93,6 +95,17 @@ def build_validator_prompt(
     liquidity = forecast.get("liquidityTarget") if isinstance(forecast.get("liquidityTarget"), dict) else {}
     retracement = forecast.get("retracement") if isinstance(forecast.get("retracement"), dict) else {}
     evidence = forecast.get("structuralEvidence")
+    citations = forecast.get("citations")
+    evidence_table = "\n".join(
+        f"| {item.get('id', '')} | {item.get('type', '')} | {item.get('level', '')} | {item.get('basis', '')} |"
+        for item in evidence
+        if isinstance(item, dict)
+    ) if isinstance(evidence, list) else ""
+    evidence_table = (
+        "| ID | Type | Level | Basis |\n| --- | --- | --- | --- |\n" + evidence_table
+        if evidence_table
+        else "No structural evidence identified."
+    )
     fields = [
         ("Bias", forecast.get("bias")),
         ("Stated confidence", forecast.get("confidence")),
@@ -106,7 +119,8 @@ def build_validator_prompt(
         ("TP2", targets.get("tp2")),
         ("Final target", targets.get("final")),
         ("Primary scenario", forecast.get("primaryScenario")),
-        ("Structural evidence", "; ".join(evidence) if isinstance(evidence, list) else None),
+        ("Structural evidence table", evidence_table),
+        ("Citations", json.dumps(citations, ensure_ascii=False) if isinstance(citations, dict) else None),
     ]
     forecast_block = "\n".join(f"{label}: {value}" for label, value in fields if value not in (None, ""))
     market_block = market_context.strip() or "NO LIVE MARKET DATA SUPPLIED."

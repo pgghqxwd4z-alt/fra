@@ -264,6 +264,24 @@ The analysis should answer:
 """
 
 
+EVIDENCE_CITATION_CONTRACT = """
+==================================================
+EVIDENCE AND CITATION CONTRACT
+==================================================
+
+STEP 1 — Identify each visible structural footprint before forecasting. For every footprint, output:
+- id
+- type
+- level
+- basis
+
+STEP 2 — Forecast forward only from the current market state. Do not narrate what already happened.
+
+Every forecast element must cite the id of the STEP 1 footprint it derives from.
+A level with no cited footprint is invalid.
+"""
+
+
 def build_retrieval_prompt(prompt: str, market_context: str, source_text: str) -> str:
     return f"""
 You are the QuantSage Knowledge Retrieval Agent.
@@ -313,6 +331,8 @@ Return a JSON object matching this forecast schema exactly. Include every proper
 
 LENSES:
 {instructions}
+
+{EVIDENCE_CITATION_CONTRACT}
 
 RETRIEVED KNOWLEDGE:
 {knowledge_context}
