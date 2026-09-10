@@ -146,7 +146,7 @@ def _finding(label: str, level: float, candles: list[Candle], window_low: float,
             "touches": touches,
             "detail": (
                 f"matches the {_timestamp_text(candle.timestamp)} {field} "
-                f"({_format_number(candle_value)}); {touches} candles touch this level"
+                f"({_format_number(candle_value)}); {touches} {'candle touches' if touches == 1 else 'candles touch'} this level"
             ),
         }
 

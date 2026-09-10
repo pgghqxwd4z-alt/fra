@@ -96,6 +96,7 @@ export interface GroundingFinding {
   label: string;
   level: number;
   status: 'GROUNDED' | 'OUT_OF_WINDOW' | 'UNMATCHED' | 'UNTOUCHED';
+  touches: number;
   detail: string;
 }
 
