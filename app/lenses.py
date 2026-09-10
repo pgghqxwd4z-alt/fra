@@ -43,11 +43,6 @@ LENS_GUARDRAILS: dict[str, str] = {
     "ppa": "PURE PRICE ACTION: Analyze observable swing structure, momentum, rejection, expansion and support/resistance.",
 }
 
-EVIDENCE_CITATION_CONTRACT = """EVIDENCE AND CITATION CONTRACT:
-STEP 1 — Identify each visible structural footprint before forecasting. For every footprint, output an id, type, level and basis.
-STEP 2 — Forecast forward only from the current market state; do not narrate what already happened.
-Every forecast element must cite the id of the STEP 1 footprint it derives from. A level with no cited footprint is invalid."""
-
 
 def lens_instructions(lenses: list[str]) -> list[str]:
     selected = [lens for lens in lenses if lens in LENS_FRAMEWORK_PROMPTS]
@@ -57,5 +52,4 @@ def lens_instructions(lenses: list[str]) -> list[str]:
     for lens in selected:
         blocks.append(LENS_FRAMEWORK_PROMPTS[lens])
         blocks.append(LENS_GUARDRAILS[lens])
-    blocks.append(EVIDENCE_CITATION_CONTRACT)
     return blocks
