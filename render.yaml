@@ -1,0 +1,63 @@
+services:
+  - type: web
+    name: quantsage
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: AI_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CLAUDE_MODEL
+        value: claude-sonnet-5
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: groq/compound
+      - key: GROQ_VISION_MODEL
+        value: qwen/qwen3.6-27b
+      - key: GROQ_SCAN_ENABLED
+        value: "0"
+      - key: CONSENSUS_ENABLED
+        value: "1"
+      - key: CONSENSUS_ENGINES
+        value: openai,claude,gemini
+      - key: APP_USERNAME
+        value: user
+      - key: APP_PASSWORD
+        sync: false
+      - key: TRUST_PROXY
+        value: "1"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "30"
+      - key: RATE_LIMIT_MAX_IDENTITIES
+        value: "4096"
+      - key: OANDA_API_TOKEN
+        sync: false
+      - key: OANDA_ENVIRONMENT
+        value: practice
+      - key: TWELVEDATA_API_KEY
+        sync: false
+      - key: MARKET_FALLBACK_ENABLED
+        value: "1"
+      - key: MARKET_RESEARCH_ENABLED
+        value: "1"
+      - key: FORECAST_LOG_ENABLED
+        value: "1"
+      - key: FORECAST_DB_PATH
+        value: data/forecasts.db
+      - key: FORECAST_HORIZON_HOURS
+        value: "48"
+      - key: FORECAST_DB_DURABLE
+        value: "0"
