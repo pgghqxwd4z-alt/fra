@@ -67,6 +67,7 @@ Hard limits on what you may do:
 - Judge only what the chart and the supplied data can actually show. A claim you cannot check from the image or the data is UNVERIFIABLE — that is not a failure, and it must not be scored as one.
 - Absence of evidence for a claim is not evidence against it. Do not reject a claim merely because the chart is ambiguous.
 - A forecast element whose cited footprint is not visible on the chart is REJECTED. A populated forecast element with no citation is also REJECTED; the rejection reason must name the unsupported element. You may not propose or correct levels.
+- When a REAL OHLCV DATA block is present, a forecast level that matches no candle open/high/low/close in that series and is not directly computed from them is REJECTED as ungrounded. Name the level in the reason. You may not propose or correct levels.
 
 Rulings:
 - VERIFIED: the chart or the supplied data supports the claim as stated.

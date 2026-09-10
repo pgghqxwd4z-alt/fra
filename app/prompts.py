@@ -281,6 +281,27 @@ Every forecast element must cite the id of the STEP 1 footprint it derives from.
 A level with no cited footprint is invalid.
 """
 
+OHLCV_DATA_GROUNDING = """
+==================================================
+OHLCV DATA GROUNDING
+==================================================
+
+You are given the real OHLCV series for this instrument and timeframe.
+Every price level you output — order block boundaries, FVG bounds, liquidity
+pools, support/resistance, entry zone, invalidation, TP1, TP2 and the final
+target — MUST be a number that exists in that series (a candle open, high, low
+or close) or is directly computed from those numbers. Use the chart image only
+to decide WHICH levels matter: structure, wicks, displacement, premium/discount.
+Never output a price that cannot be traced to the series.
+
+State the candle time supplying the level in the `basis` field of each
+STEP 1 footprint, e.g. "high of the 2026-09-09 13:00 candle".
+
+The series covers the stated timeframe. If the image's time axis or candle
+spacing clearly does not match that timeframe, say so in warnings, derive
+levels from the image alone, and cap confidence at 45.
+"""
+
 
 def build_retrieval_prompt(prompt: str, market_context: str, source_text: str) -> str:
     return f"""
@@ -322,6 +343,8 @@ def build_forecast_prompt(
         verification += LIVE_MARKET_VERIFICATION
     if "EXTERNAL RESEARCH (web," in market_context:
         verification += EXTERNAL_RESEARCH_VERIFICATION
+    if "REAL OHLCV DATA —" in market_context:
+        verification += OHLCV_DATA_GROUNDING
     if include_schema:
         suffix = f"""
 Return a JSON object matching this forecast schema exactly. Include every property shown, use the enum values exactly, and do not add properties:

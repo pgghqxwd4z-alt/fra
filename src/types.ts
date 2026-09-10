@@ -80,6 +80,18 @@ export type TradeDirection =
   | 'SELL'
   | 'WAIT';
 
+export type ChartTimeframe = '5m' | '15m' | '1h' | '4h' | '1d';
+
+export interface DataGrounding {
+  grounded: boolean;
+  instrument: string | null;
+  timeframe: string | null;
+  source: 'oanda' | 'twelvedata' | 'yahoo' | null;
+  proxy: boolean;
+  candles: number;
+  reason: string | null;
+}
+
 export type LiquidityType =
   | 'BUY_SIDE'
   | 'SELL_SIDE'

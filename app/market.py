@@ -34,6 +34,16 @@ TWELVEDATA_SYMBOLS = {
     "GBP_USD": "GBP/USD",
     "USD_JPY": "USD/JPY",
 }
+SUPPORTED_TIMEFRAMES = ("5m", "15m", "1h", "4h", "1d")
+OHLCV_CANDLE_COUNT = 150
+OANDA_INTERVALS = {"5m": "M5", "15m": "M15", "1h": "H1", "4h": "H4", "1d": "D"}
+TWELVEDATA_INTERVALS = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day"}
+YAHOO_INTERVALS = {
+    "5m": ("5m", "5d"),
+    "15m": ("15m", "1mo"),
+    "1h": ("60m", "3mo"),
+    "1d": ("1d", "1y"),
+}
 INSTRUMENT_ALIASES = {
     "XAUUSD": "XAU_USD",
     "GOLD": "XAU_USD",
@@ -62,6 +72,76 @@ class Candle:
 class MarketData:
     context: str
     verification: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class OhlcvSeries:
+    instrument: str
+    timeframe: str
+    source: str
+    proxy: bool
+    candles: list[Candle]
+    context: str
+
+
+def normalize_timeframe(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = re.sub(r"[\s_-]", "", value.strip().lower())
+    aliases = {
+        "5m": "5m",
+        "5min": "5m",
+        "m5": "5m",
+        "15m": "15m",
+        "15min": "15m",
+        "m15": "15m",
+        "1h": "1h",
+        "1hour": "1h",
+        "h1": "1h",
+        "4h": "4h",
+        "4hour": "4h",
+        "h4": "4h",
+        "1d": "1d",
+        "1day": "1d",
+        "d1": "1d",
+    }
+    return aliases.get(normalized)
+
+
+def _format_ohlcv_time(timestamp: str, timeframe: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp[:10] if timeframe == "1d" else timestamp[:16].replace("T", " ")
+    return parsed.strftime("%Y-%m-%d" if timeframe == "1d" else "%Y-%m-%d %H:%M")
+
+
+def _build_ohlcv_context(
+    instrument: str,
+    timeframe: str,
+    source_label: str,
+    candles: list[Candle],
+    proxy: bool = False,
+) -> str:
+    rows = "\n".join(
+        f"{_format_ohlcv_time(candle.timestamp, timeframe)} | "
+        f"{_format_number(candle.open)} {_format_number(candle.high)} "
+        f"{_format_number(candle.low)} {_format_number(candle.close)}"
+        for candle in candles
+    )
+    first = _format_ohlcv_time(candles[0].timestamp, timeframe)
+    last = _format_ohlcv_time(candles[-1].timestamp, timeframe)
+    high = max(candle.high for candle in candles)
+    low = min(candle.low for candle in candles)
+    proxy_note = "\nFeed note: futures proxy for spot; levels track the proxy, not spot." if proxy else ""
+    return (
+        f"REAL OHLCV DATA — {instrument} {timeframe} ({source_label}, {len(candles)} candles, oldest->newest)\n"
+        "Columns: time | open high low close\n"
+        f"{rows}\n"
+        f"Window: {first} -> {last} | high {_format_number(high)} | "
+        f"low {_format_number(low)} | last close {_format_number(candles[-1].close)}"
+        f"{proxy_note}"
+    )
 
 
 def _instrument_key(value: str) -> str:
@@ -350,6 +430,121 @@ async def _request_twelvedata_market_data(client: Any, instrument: str) -> Marke
             "asOf": as_of,
         },
     )
+
+
+async def _request_ohlcv_oanda(
+    client: Any,
+    instrument: str,
+    timeframe: str,
+    environment: str,
+) -> OhlcvSeries:
+    granularity = OANDA_INTERVALS[timeframe]
+    endpoint = f"https://{OANDA_HOSTS[environment]}/v3/instruments/{quote(instrument, safe='')}/candles"
+    response = await client.get(
+        endpoint,
+        params={"granularity": granularity, "count": OHLCV_CANDLE_COUNT, "price": "M"},
+        headers={"Authorization": f"Bearer {os.environ['OANDA_API_TOKEN']}"},
+    )
+    response.raise_for_status()
+    candles = _parse_candles(response.json(), granularity)[-OHLCV_CANDLE_COUNT:]
+    return OhlcvSeries(
+        instrument,
+        timeframe,
+        "oanda",
+        False,
+        candles,
+        _build_ohlcv_context(instrument, timeframe, "Oanda", candles),
+    )
+
+
+async def _request_ohlcv_twelvedata(
+    client: Any,
+    instrument: str,
+    timeframe: str,
+) -> OhlcvSeries:
+    interval = TWELVEDATA_INTERVALS[timeframe]
+    response = await client.get(
+        "https://api.twelvedata.com/time_series",
+        params={
+            "symbol": TWELVEDATA_SYMBOLS[instrument],
+            "interval": interval,
+            "outputsize": OHLCV_CANDLE_COUNT,
+            "timezone": "UTC",
+            "format": "JSON",
+            "apikey": os.environ["TWELVEDATA_API_KEY"],
+        },
+    )
+    response.raise_for_status()
+    candles = _parse_twelvedata_candles(response.json(), interval)[-OHLCV_CANDLE_COUNT:]
+    return OhlcvSeries(
+        instrument,
+        timeframe,
+        "twelvedata",
+        False,
+        candles,
+        _build_ohlcv_context(instrument, timeframe, "Twelve Data", candles),
+    )
+
+
+async def _request_ohlcv_yahoo(
+    client: Any,
+    instrument: str,
+    timeframe: str,
+) -> OhlcvSeries:
+    interval, range_value = YAHOO_INTERVALS[timeframe]
+    symbol, proxy = YAHOO_SYMBOLS[instrument]
+    endpoint = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol, safe='')}"
+    response = await client.get(
+        endpoint,
+        params={"interval": interval, "range": range_value},
+        headers={"User-Agent": "Mozilla/5.0 (compatible; QuantSage/1.0)"},
+    )
+    response.raise_for_status()
+    candles = _parse_yahoo_candles(response.json(), interval, limit=None)[-OHLCV_CANDLE_COUNT:]
+    return OhlcvSeries(
+        instrument,
+        timeframe,
+        "yahoo",
+        proxy,
+        candles,
+        _build_ohlcv_context(instrument, timeframe, "Yahoo Finance delayed", candles, proxy),
+    )
+
+
+async def fetch_ohlcv_series(instrument: str | None, timeframe: str | None) -> OhlcvSeries | None:
+    if not instrument or not timeframe:
+        return None
+    normalized_timeframe = normalize_timeframe(timeframe)
+    if not normalized_timeframe:
+        return None
+
+    oanda_token = os.getenv("OANDA_API_TOKEN", "").strip()
+    if oanda_token and normalized_timeframe in OANDA_INTERVALS:
+        environment = _environment()
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                return await _request_ohlcv_oanda(client, instrument, normalized_timeframe, environment)
+        except Exception as error:
+            logger.warning("Oanda OHLCV data failed (%s); trying the next configured feed.", error)
+
+    twelvedata_key = os.getenv("TWELVEDATA_API_KEY", "").strip()
+    if twelvedata_key and instrument in TWELVEDATA_SYMBOLS and normalized_timeframe in TWELVEDATA_INTERVALS:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                return await _request_ohlcv_twelvedata(client, instrument, normalized_timeframe)
+        except Exception as error:
+            logger.warning("Twelve Data OHLCV data failed (%s); trying the next configured feed.", error)
+
+    if os.getenv("MARKET_FALLBACK_ENABLED", "1").strip().lower() in {"0", "false", "no"}:
+        return None
+    if instrument not in YAHOO_SYMBOLS or normalized_timeframe not in YAHOO_INTERVALS:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            return await _request_ohlcv_yahoo(client, instrument, normalized_timeframe)
+    except Exception as error:
+        logger.warning("Yahoo Finance OHLCV data failed (%s).", error)
+    return None
 
 
 def _filter_history(candles: list[Candle], start: datetime, end: datetime) -> list[Candle]:

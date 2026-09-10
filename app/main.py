@@ -24,7 +24,7 @@ from .forecast_log import recent, record_forecast, score_pending, stats
 from .citations import check_citations
 from .library import search_library
 from .lenses import lens_instructions
-from .market import fetch_market_data, resolve_instrument
+from .market import fetch_market_data, fetch_ohlcv_series, normalize_timeframe, resolve_instrument
 from .providers import AIProvider, SafeMessageError, normalize_validator
 from .research import fetch_market_research
 from .risk import calculate_risk
@@ -395,8 +395,10 @@ async def annotate(payload: dict[str, Any]) -> Any:
         lenses = payload.get("lenses", ["smc"])
         market_context = payload.get("marketContext", "")
         instrument = resolve_instrument(payload.get("instrument"), prompt)
-        market_data_result, research_result = await asyncio.gather(
+        timeframe = normalize_timeframe(payload.get("timeframe"))
+        market_data_result, ohlcv_result, research_result = await asyncio.gather(
             fetch_market_data(instrument),
+            fetch_ohlcv_series(instrument, timeframe),
             fetch_market_research(provider, instrument),
             return_exceptions=True,
         )
@@ -407,6 +409,13 @@ async def annotate(payload: dict[str, Any]) -> Any:
         )
         if isinstance(market_data_result, Exception):
             logger.warning("Oanda market data failed unexpectedly: %s", market_data_result)
+        ohlcv_series = (
+            ohlcv_result
+            if not isinstance(ohlcv_result, Exception)
+            else None
+        )
+        if isinstance(ohlcv_result, Exception):
+            logger.warning("OHLCV series failed unexpectedly: %s", ohlcv_result)
         market_research = (
             research_result
             if not isinstance(research_result, Exception)
@@ -417,6 +426,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
         context_parts = [
             market_context if isinstance(market_context, str) and market_context.strip() else "",
             market_data.context if market_data else "",
+            ohlcv_series.context if ohlcv_series else "",
             market_research.context if market_research else "",
         ]
         market_context = "\n\n".join(part for part in context_parts if part)
@@ -478,6 +488,23 @@ async def annotate(payload: dict[str, Any]) -> Any:
             first_failure = next((attempt for attempt in attempts if isinstance(attempt, Exception)), RuntimeError("AI request failed"))
             raise first_failure
         consensus, result = build_consensus(successes, failures)
+        if not instrument:
+            grounding_reason = "instrument not recognised"
+        elif not timeframe:
+            grounding_reason = "timeframe not specified"
+        elif not ohlcv_series:
+            grounding_reason = "no candle feed available for this symbol and timeframe"
+        else:
+            grounding_reason = None
+        result["dataGrounding"] = {
+            "grounded": bool(ohlcv_series),
+            "instrument": instrument,
+            "timeframe": timeframe,
+            "source": ohlcv_series.source if ohlcv_series else None,
+            "proxy": ohlcv_series.proxy if ohlcv_series else False,
+            "candles": len(ohlcv_series.candles) if ohlcv_series else 0,
+            "reason": grounding_reason,
+        }
         raw_forecasts = [copy.deepcopy(model_result.get("forecast")) for model_result in successes]
         apply_consensus_cap(result, consensus)
         validation_result: dict[str, Any] | None = None

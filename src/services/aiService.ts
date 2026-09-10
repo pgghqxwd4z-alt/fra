@@ -9,7 +9,9 @@ import {
   Risk,
   FastScan,
   KnowledgeResult,
-  ValidationResult
+  ValidationResult,
+  ChartTimeframe,
+  DataGrounding
 } from "../types";
 
 interface ChatResponse {
@@ -29,6 +31,7 @@ interface AnnotateResponse {
   scan?: FastScan;
   validation?: ValidationResult;
   validationUnavailable?: string;
+  dataGrounding?: DataGrounding;
 }
 
 interface TrackRecordResponse {
@@ -67,13 +70,14 @@ export const aiService = {
   async annotateChart(
     base64Image: string,
     prompt: string,
-    lenses: string[] = ['smc']
+    lenses: string[] = ['smc'],
+    timeframe?: ChartTimeframe
   ): Promise<AnnotateResponse> {
     try {
       const response = await fetch("/api/annotate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base64Image, prompt, lenses })
+        body: JSON.stringify({ base64Image, prompt, lenses, timeframe })
       });
 
       if (!response.ok) {
@@ -91,7 +95,8 @@ export const aiService = {
         risk: data.risk,
         scan: data.scan,
         validation: data.validation,
-        validationUnavailable: data.validationUnavailable
+        validationUnavailable: data.validationUnavailable,
+        dataGrounding: data.dataGrounding
       };
     } catch (error) {
       console.error("Forecast Error:", error);

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { Consensus, FastScan, ForecastResult, MarketResearch, MarketVerification, Risk, ValidationResult } from '../types';
+import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, MarketResearch, MarketVerification, Risk, ValidationResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -32,6 +32,23 @@ const MarketVerificationLine: React.FC<{
 }> = ({ verification, fullscreen = false }) => (
   <div className={fullscreen ? 'text-xs text-emerald-300/70 font-mono' : 'text-[7px] text-emerald-300/70 font-mono'}>
     Verified vs {marketSourceLabels[verification.source]} {verification.instrument}{verification.proxy ? ' (proxy)' : ''} · last {verification.lastClose} · {verificationTime(verification.asOf)}
+  </div>
+);
+
+const DataGroundingLine: React.FC<{
+  grounding: DataGrounding;
+  fullscreen?: boolean;
+}> = ({ grounding, fullscreen = false }) => (
+  <div className={fullscreen ? 'text-xs font-mono' : 'text-[7px] font-mono'}>
+    {grounding.grounded ? (
+      <span className="text-emerald-300/70">
+        Grounded · {grounding.candles} × {grounding.timeframe} candles · {marketSourceLabels[grounding.source || 'yahoo']}{grounding.proxy ? ' (proxy)' : ''}
+      </span>
+    ) : (
+      <span className="text-amber-300/80">
+        Not grounded — levels read from the image only ({grounding.reason || 'no candle feed available for this symbol and timeframe'})
+      </span>
+    )}
   </div>
 );
 
@@ -373,6 +390,7 @@ const Visualizer: React.FC = () => {
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
   const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
+  const [dataGrounding, setDataGrounding] = useState<DataGrounding | null>(null);
   const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
   const [consensus, setConsensus] = useState<Consensus | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -380,6 +398,7 @@ const Visualizer: React.FC = () => {
   const [scan, setScan] = useState<FastScan | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>('15m');
   const [prompt, setPrompt] = useState(`
 Forecast the most likely next price move.
 
@@ -452,6 +471,7 @@ Focus primarily on the future price path from the current market state.
       setResultImage(null);
       setAnalysis(null);
       setMarketVerification(null);
+      setDataGrounding(null);
       setMarketResearch(null);
       setValidation(null);
       setValidationUnavailable(null);
@@ -529,11 +549,12 @@ Focus primarily on the future price path from the current market state.
     setProcessing(true);
     try {
       const base64 = image.split(',')[1];
-      const result = await aiService.annotateChart(base64, prompt, selectedLenses);
+      const result = await aiService.annotateChart(base64, prompt, selectedLenses, timeframe);
       setResultImage(result.image);
       setAnalysis(result.analysis);
       setForecast(result.forecast ? { ...result.forecast, risk: result.risk } : null);
       setMarketVerification(result.marketVerification || null);
+      setDataGrounding(result.dataGrounding || null);
       setMarketResearch(result.marketResearch || null);
       setConsensus(result.consensus || null);
       setValidation(result.validation || null);
@@ -658,6 +679,7 @@ Focus primarily on the future price path from the current market state.
                       setAnalysis(null);
                       setForecast(null);
                       setMarketVerification(null);
+                      setDataGrounding(null);
                       setMarketResearch(null);
                       setConsensus(null);
                       setValidation(null);
@@ -726,6 +748,7 @@ Focus primarily on the future price path from the current market state.
                 </div>
 
                 {marketVerification && <MarketVerificationLine verification={marketVerification} />}
+                {dataGrounding && <DataGroundingLine grounding={dataGrounding} />}
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
                 <FastScanLine scan={scan || undefined} />
                 <ConsensusStrip consensus={consensus || undefined} />
@@ -766,6 +789,21 @@ Focus primarily on the future price path from the current market state.
                   );
                 })}
               </div>
+              <label className="flex items-center justify-between gap-2 text-[7px] font-bold uppercase tracking-widest text-white/40">
+                <span>Chart TF</span>
+                <select
+                  value={timeframe}
+                  onChange={(e) => setTimeframe(e.target.value as ChartTimeframe)}
+                  className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[8px] font-mono text-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                  aria-label="Chart timeframe matching uploaded chart"
+                >
+                  <option value="5m">5m</option>
+                  <option value="15m">15m</option>
+                  <option value="1h">1h</option>
+                  <option value="4h">4h</option>
+                  <option value="1d">1d</option>
+                </select>
+              </label>
               <div className="space-y-2 pt-1">
                 <textarea
                   value={prompt}
@@ -867,6 +905,7 @@ Focus primarily on the future price path from the current market state.
               </div>
             </div>
             {marketVerification && <MarketVerificationLine verification={marketVerification} fullscreen />}
+            {dataGrounding && <DataGroundingLine grounding={dataGrounding} fullscreen />}
             {marketResearch && (
               <>
                 <MarketResearchSummary research={marketResearch} fullscreen />
