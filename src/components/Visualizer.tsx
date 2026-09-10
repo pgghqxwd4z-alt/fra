@@ -42,7 +42,7 @@ const DataGroundingLine: React.FC<{
   <div className={fullscreen ? 'text-xs font-mono' : 'text-[7px] font-mono'}>
     {grounding.grounded ? (
       <span className="text-emerald-300/70">
-        Grounded · {grounding.candles} × {grounding.timeframe} candles · {marketSourceLabels[grounding.source || 'yahoo']}{grounding.proxy ? ' (proxy)' : ''}
+        Grounded · {grounding.candles} × {grounding.timeframe} candles{grounding.source ? ` · ${marketSourceLabels[grounding.source]}` : ''}{grounding.proxy ? ' (proxy)' : ''}
       </span>
     ) : (
       <span className="text-amber-300/80">

@@ -423,14 +423,18 @@ async def annotate(payload: dict[str, Any]) -> Any:
         )
         if isinstance(research_result, Exception):
             logger.warning("External market research failed unexpectedly: %s", research_result)
-        context_parts = [
+        retrieval_context_parts = [
             market_context if isinstance(market_context, str) and market_context.strip() else "",
             market_data.context if market_data else "",
-            ohlcv_series.context if ohlcv_series else "",
             market_research.context if market_research else "",
         ]
+        retrieval_context = "\n\n".join(part for part in retrieval_context_parts if part)
+        context_parts = [
+            retrieval_context,
+            ohlcv_series.context if ohlcv_series else "",
+        ]
         market_context = "\n\n".join(part for part in context_parts if part)
-        knowledge = await retrieve_knowledge_with_library(prompt, lenses, market_context)
+        knowledge = await retrieve_knowledge_with_library(prompt, lenses, retrieval_context)
         instructions = "\n".join(lens_instructions(lenses))
         engines = consensus_engines()
         use_consensus = consensus_enabled() and len(engines) >= 2
