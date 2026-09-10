@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -9,7 +10,9 @@ from .market import Candle
 from .risk import LEVEL_RE
 
 
-GROUNDING_TOLERANCE_PCT = float(os.getenv("GROUNDING_TOLERANCE_PCT", "0.05"))
+GROUNDING_TOLERANCE_PCT = float(os.getenv("GROUNDING_TOLERANCE_PCT", "0.02"))
+DATE_SPAN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+TIME_SPAN_RE = re.compile(r"\d{1,2}:\d{2}")
 
 
 def _format_number(value: float) -> str:
@@ -29,8 +32,15 @@ def _level_values(text: Any, window_low: float, window_high: float) -> list[floa
         return []
     lower_bound = 0.5 * window_low
     upper_bound = 2.0 * window_high
+    date_time_spans = [
+        match.span()
+        for pattern in (DATE_SPAN_RE, TIME_SPAN_RE)
+        for match in pattern.finditer(text)
+    ]
     values: list[float] = []
     for match in LEVEL_RE.finditer(text):
+        if any(match.start() < end and start < match.end() for start, end in date_time_spans):
+            continue
         raw_value = match.group(0)
         suffix = text[match.end() : match.end() + 1]
         if suffix in {"%", "R", "r"}:
@@ -38,8 +48,6 @@ def _level_values(text: Any, window_low: float, window_high: float) -> list[floa
         try:
             value = float(raw_value.replace(",", ""))
         except ValueError:
-            continue
-        if 1900 <= value <= 2100 and len(raw_value.replace(",", "").split(".")[0]) == 4:
             continue
         if math.isfinite(value) and lower_bound <= value <= upper_bound:
             values.append(value)
@@ -107,6 +115,7 @@ def _finding(label: str, level: float, candles: list[Candle], window_low: float,
             "label": label,
             "level": level,
             "status": "OUT_OF_WINDOW",
+            "touches": 0,
             "detail": f"{_format_number(level)} is below the 150-candle window low {_format_number(window_low)}",
         }
     if level > window_high:
@@ -114,12 +123,16 @@ def _finding(label: str, level: float, candles: list[Candle], window_low: float,
             "label": label,
             "level": level,
             "status": "OUT_OF_WINDOW",
+            "touches": 0,
             "detail": f"{_format_number(level)} is above the 150-candle window high {_format_number(window_high)}",
         }
 
     tolerance = abs(level) * GROUNDING_TOLERANCE_PCT / 100
     matches: list[tuple[float, Candle, str, float]] = []
+    touches = 0
     for candle in candles:
+        if abs(level - candle.high) <= tolerance or abs(level - candle.low) <= tolerance:
+            touches += 1
         for field, candle_value in _candle_values(candle):
             difference = abs(level - candle_value)
             if difference <= tolerance:
@@ -130,23 +143,26 @@ def _finding(label: str, level: float, candles: list[Candle], window_low: float,
             "label": label,
             "level": level,
             "status": "GROUNDED",
+            "touches": touches,
             "detail": (
                 f"matches the {_timestamp_text(candle.timestamp)} {field} "
-                f"({_format_number(candle_value)})"
+                f"({_format_number(candle_value)}); {touches} candles touch this level"
             ),
         }
 
-    if label.endswith("(SUPPORT_RESISTANCE)"):
+    if label.endswith("(SUPPORT_RESISTANCE)") and touches == 0:
         return {
             "label": label,
             "level": level,
             "status": "UNTOUCHED",
+            "touches": touches,
             "detail": "no candle touches this level in the window (may predate it)",
         }
     return {
         "label": label,
         "level": level,
         "status": "UNMATCHED",
+        "touches": touches,
         "detail": f"{_format_number(level)} matches no candle extreme within {GROUNDING_TOLERANCE_PCT:g}%",
     }
 

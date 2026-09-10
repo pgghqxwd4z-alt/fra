@@ -149,8 +149,7 @@ def build_validator_prompt(
 {rule_block}
 
 FORECAST UNDER REVIEW (produced by another model from the same chart):
-{forecast_block}
-{grounding_section}
+{forecast_block}{grounding_section}
 
 LIVE MARKET DATA AND RESEARCH CONTEXT:
 {market_block}

@@ -59,9 +59,13 @@ const GroundingReportLine: React.FC<{
   const findings = report.findings.filter((finding) => finding.status !== 'GROUNDED');
   return (
     <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} font-mono space-y-0.5`}>
-      <div className={report.grounded === report.checked ? 'text-emerald-300/70' : 'text-amber-300/80'}>
-        Levels checked: {report.grounded}/{report.checked} match real candles
-      </div>
+      {report.checked === 0 ? (
+        <div className="text-white/40">No numeric levels to check</div>
+      ) : (
+        <div className={report.grounded === report.checked ? 'text-emerald-300/70' : 'text-amber-300/80'}>
+          Levels checked: {report.grounded}/{report.checked} match real candles (±{report.tolerancePct.toFixed(2)}%)
+        </div>
+      )}
       {findings.map((finding, index) => (
         <div
           key={`${finding.label}-${finding.level}-${index}`}
