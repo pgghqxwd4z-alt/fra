@@ -92,6 +92,22 @@ export interface DataGrounding {
   reason: string | null;
 }
 
+export interface GroundingFinding {
+  label: string;
+  level: number;
+  status: 'GROUNDED' | 'OUT_OF_WINDOW' | 'UNMATCHED' | 'UNTOUCHED';
+  detail: string;
+}
+
+export interface GroundingReport {
+  tolerancePct: number;
+  windowHigh: number;
+  windowLow: number;
+  checked: number;
+  grounded: number;
+  findings: GroundingFinding[];
+}
+
 export type LiquidityType =
   | 'BUY_SIDE'
   | 'SELL_SIDE'

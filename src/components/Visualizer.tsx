@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, MarketResearch, MarketVerification, Risk, ValidationResult } from '../types';
+import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, GroundingReport, MarketResearch, MarketVerification, Risk, ValidationResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -51,6 +51,28 @@ const DataGroundingLine: React.FC<{
     )}
   </div>
 );
+
+const GroundingReportLine: React.FC<{
+  report: GroundingReport;
+  fullscreen?: boolean;
+}> = ({ report, fullscreen = false }) => {
+  const findings = report.findings.filter((finding) => finding.status !== 'GROUNDED');
+  return (
+    <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} font-mono space-y-0.5`}>
+      <div className={report.grounded === report.checked ? 'text-emerald-300/70' : 'text-amber-300/80'}>
+        Levels checked: {report.grounded}/{report.checked} match real candles
+      </div>
+      {findings.map((finding, index) => (
+        <div
+          key={`${finding.label}-${finding.level}-${index}`}
+          className={finding.status === 'UNTOUCHED' ? 'text-white/40' : 'text-amber-300/80'}
+        >
+          {finding.label} {finding.level} — {finding.detail}
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const MarketResearchSummary: React.FC<{
   research: MarketResearch;
@@ -391,6 +413,7 @@ const Visualizer: React.FC = () => {
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
   const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
   const [dataGrounding, setDataGrounding] = useState<DataGrounding | null>(null);
+  const [grounding, setGrounding] = useState<GroundingReport | null>(null);
   const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
   const [consensus, setConsensus] = useState<Consensus | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -472,6 +495,7 @@ Focus primarily on the future price path from the current market state.
       setAnalysis(null);
       setMarketVerification(null);
       setDataGrounding(null);
+      setGrounding(null);
       setMarketResearch(null);
       setValidation(null);
       setValidationUnavailable(null);
@@ -555,6 +579,7 @@ Focus primarily on the future price path from the current market state.
       setForecast(result.forecast ? { ...result.forecast, risk: result.risk } : null);
       setMarketVerification(result.marketVerification || null);
       setDataGrounding(result.dataGrounding || null);
+      setGrounding(result.grounding || null);
       setMarketResearch(result.marketResearch || null);
       setConsensus(result.consensus || null);
       setValidation(result.validation || null);
@@ -680,6 +705,7 @@ Focus primarily on the future price path from the current market state.
                       setForecast(null);
                       setMarketVerification(null);
                       setDataGrounding(null);
+                      setGrounding(null);
                       setMarketResearch(null);
                       setConsensus(null);
                       setValidation(null);
@@ -749,6 +775,7 @@ Focus primarily on the future price path from the current market state.
 
                 {marketVerification && <MarketVerificationLine verification={marketVerification} />}
                 {dataGrounding && <DataGroundingLine grounding={dataGrounding} />}
+                {grounding && <GroundingReportLine report={grounding} />}
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
                 <FastScanLine scan={scan || undefined} />
                 <ConsensusStrip consensus={consensus || undefined} />
@@ -906,6 +933,7 @@ Focus primarily on the future price path from the current market state.
             </div>
             {marketVerification && <MarketVerificationLine verification={marketVerification} fullscreen />}
             {dataGrounding && <DataGroundingLine grounding={dataGrounding} fullscreen />}
+            {grounding && <GroundingReportLine report={grounding} fullscreen />}
             {marketResearch && (
               <>
                 <MarketResearchSummary research={marketResearch} fullscreen />

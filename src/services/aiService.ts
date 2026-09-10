@@ -11,7 +11,8 @@ import {
   KnowledgeResult,
   ValidationResult,
   ChartTimeframe,
-  DataGrounding
+  DataGrounding,
+  GroundingReport
 } from "../types";
 
 interface ChatResponse {
@@ -32,6 +33,7 @@ interface AnnotateResponse {
   validation?: ValidationResult;
   validationUnavailable?: string;
   dataGrounding?: DataGrounding;
+  grounding?: GroundingReport;
 }
 
 interface TrackRecordResponse {
@@ -96,7 +98,8 @@ export const aiService = {
         scan: data.scan,
         validation: data.validation,
         validationUnavailable: data.validationUnavailable,
-        dataGrounding: data.dataGrounding
+        dataGrounding: data.dataGrounding,
+        grounding: data.grounding
       };
     } catch (error) {
       console.error("Forecast Error:", error);

@@ -22,6 +22,7 @@ from starlette.types import ASGIApp
 
 from .forecast_log import recent, record_forecast, score_pending, stats
 from .citations import check_citations
+from .grounding import check_level_grounding
 from .library import search_library
 from .lenses import lens_instructions
 from .market import fetch_market_data, fetch_ohlcv_series, normalize_timeframe, resolve_instrument
@@ -511,6 +512,26 @@ async def annotate(payload: dict[str, Any]) -> Any:
         }
         raw_forecasts = [copy.deepcopy(model_result.get("forecast")) for model_result in successes]
         apply_consensus_cap(result, consensus)
+        grounding: dict[str, Any] | None = None
+        if ohlcv_series:
+            try:
+                grounding = check_level_grounding(result["forecast"], ohlcv_series.candles)
+            except Exception as error:
+                logger.warning("Deterministic forecast grounding failed: %s", error)
+        if grounding:
+            result["grounding"] = grounding
+            out_of_window = sum(
+                finding.get("status") == "OUT_OF_WINDOW"
+                for finding in grounding.get("findings", [])
+                if isinstance(finding, dict)
+            )
+            if out_of_window:
+                forecast = result["forecast"]
+                forecast["confidence"] = min(forecast.get("confidence", 0), 45)
+                forecast.setdefault("warnings", []).append(
+                    f"{out_of_window} forecast level(s) fall outside the real candle window."
+                )
+                result["analysis"] = json.dumps(forecast, separators=(",", ":"), ensure_ascii=False)
         validation_result: dict[str, Any] | None = None
         validation_engine: str | None = None
         validation_cross_provider = False
@@ -561,9 +582,12 @@ async def annotate(payload: dict[str, Any]) -> Any:
                 result["validationUnavailable"] = "no second provider available"
             else:
                 try:
+                    validator_forecast = copy.deepcopy(result["forecast"])
+                    if grounding:
+                        validator_forecast["_grounding"] = grounding
                     validation_payload = await provider.validate_forecast(
                         payload.get("base64Image", ""),
-                        result["forecast"],
+                        validator_forecast,
                         lenses,
                         market_context,
                         validation_engine,

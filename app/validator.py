@@ -68,6 +68,7 @@ Hard limits on what you may do:
 - Absence of evidence for a claim is not evidence against it. Do not reject a claim merely because the chart is ambiguous.
 - A forecast element whose cited footprint is not visible on the chart is REJECTED. A populated forecast element with no citation is also REJECTED; the rejection reason must name the unsupported element. You may not propose or correct levels.
 - When a REAL OHLCV DATA block is present, a forecast level that matches no candle open/high/low/close in that series and is not directly computed from them is REJECTED as ungrounded. Name the level in the reason. You may not propose or correct levels.
+- The deterministic grounding checks above are code output, not claims: treat an OUT_OF_WINDOW level as REJECTED and an UNMATCHED level as at best UNVERIFIABLE. You may not propose or correct levels.
 
 Rulings:
 - VERIFIED: the chart or the supplied data supports the claim as stated.
@@ -107,6 +108,24 @@ def build_validator_prompt(
         if evidence_table
         else "No structural evidence identified."
     )
+    grounding = forecast.get("_grounding")
+    grounding_findings = (
+        grounding.get("findings")
+        if isinstance(grounding, dict) and isinstance(grounding.get("findings"), list)
+        else []
+    )
+    grounding_rows = [
+        f"{finding.get('label', '')} {finding.get('level', '')} — "
+        f"{finding.get('status', '')} — {finding.get('detail', '')}"
+        for finding in grounding_findings
+        if isinstance(finding, dict) and finding.get("status") != "GROUNDED"
+    ]
+    grounding_block = (
+        "DETERMINISTIC GROUNDING CHECKS (code, not opinion)\n"
+        + "\n".join(grounding_rows)
+        if grounding_rows
+        else ""
+    )
     fields = [
         ("Bias", forecast.get("bias")),
         ("Stated confidence", forecast.get("confidence")),
@@ -125,11 +144,13 @@ def build_validator_prompt(
     ]
     forecast_block = "\n".join(f"{label}: {value}" for label, value in fields if value not in (None, ""))
     market_block = market_context.strip() or "NO LIVE MARKET DATA SUPPLIED."
+    grounding_section = f"\n\n{grounding_block}" if grounding_block else ""
     return f"""FRAMEWORK RULES TO ENFORCE:
 {rule_block}
 
 FORECAST UNDER REVIEW (produced by another model from the same chart):
 {forecast_block}
+{grounding_section}
 
 LIVE MARKET DATA AND RESEARCH CONTEXT:
 {market_block}
