@@ -340,7 +340,12 @@ def apply_consensus_cap(result: dict[str, Any], consensus: dict[str, Any]) -> No
     result["analysis"] = json.dumps(forecast, separators=(",", ":"), ensure_ascii=False)
 
 
-def apply_validation(result: dict[str, Any], validation: dict[str, Any], engine: str) -> dict[str, Any]:
+def apply_validation(
+    result: dict[str, Any],
+    validation: dict[str, Any],
+    engine: str,
+    cross_provider: bool,
+) -> dict[str, Any]:
     normalized = normalize_validator(validation)
     forecast = result["forecast"]
     penalty = normalized["confidencePenalty"]
@@ -360,6 +365,7 @@ def apply_validation(result: dict[str, Any], validation: dict[str, Any], engine:
     result["analysis"] = json.dumps(forecast, separators=(",", ":"), ensure_ascii=False)
     result["validation"] = {
         "engine": engine,
+        "crossProvider": cross_provider,
         "verdict": normalized["verdict"],
         "chartAgreement": normalized["chartAgreement"],
         "confidencePenalty": penalty,
@@ -474,29 +480,62 @@ async def annotate(payload: dict[str, Any]) -> Any:
         apply_consensus_cap(result, consensus)
         validation_result: dict[str, Any] | None = None
         validation_engine: str | None = None
+        validation_cross_provider = False
         if validator_enabled():
             selected_engine = consensus.get("selectedEngine")
-            available_engines = consensus_engines()
+            successful_engines = [
+                model_result.get("engine")
+                for model_result in successes
+                if isinstance(model_result.get("engine"), str)
+            ]
+            failed_engines = {
+                failure["engine"]
+                for failure in consensus.get("failures", [])
+                if isinstance(failure.get("engine"), str)
+            }
+            configured_engines = consensus_engines()
             if isinstance(selected_engine, str):
                 validation_engine = next(
-                    (engine for engine in available_engines if engine != selected_engine),
-                    selected_engine,
+                    (engine for engine in successful_engines if engine != selected_engine),
+                    None,
                 )
+                if validation_engine:
+                    validation_cross_provider = True
+                else:
+                    validation_engine = next(
+                        (
+                            engine
+                            for engine in configured_engines
+                            if engine != selected_engine and engine not in failed_engines
+                        ),
+                        selected_engine,
+                    )
+                    validation_cross_provider = validation_engine != selected_engine
+            if not validation_engine:
+                result["validationUnavailable"] = "no second provider available"
+            else:
                 try:
+                    validation_payload = await provider.validate_forecast(
+                        payload.get("base64Image", ""),
+                        result["forecast"],
+                        lenses,
+                        market_context,
+                        validation_engine,
+                    )
                     validation_result = apply_validation(
                         result,
-                        await provider.validate_forecast(
-                            payload.get("base64Image", ""),
-                            result["forecast"],
-                            lenses,
-                            market_context,
-                            validation_engine,
-                        ),
+                        validation_payload,
                         validation_engine,
+                        validation_cross_provider,
                     )
                 except Exception as error:
                     logger.warning("Forecast validation %s failed: %s", validation_engine, error)
                     validation_result = None
+                    result["validationUnavailable"] = (
+                        str(error)
+                        if isinstance(error, SafeMessageError)
+                        else f"{validation_engine} validation request failed"
+                    )
         if market_data:
             result["marketVerification"] = market_data.verification
         if market_research:

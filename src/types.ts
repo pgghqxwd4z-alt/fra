@@ -211,6 +211,7 @@ export interface ValidationFinding {
 
 export interface ValidationResult {
   engine: string;
+  crossProvider: boolean;
   verdict: ValidationVerdict;
   chartAgreement: ValidationChartAgreement;
   confidencePenalty: number;

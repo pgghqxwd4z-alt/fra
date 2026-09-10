@@ -28,6 +28,7 @@ interface AnnotateResponse {
   risk?: Risk;
   scan?: FastScan;
   validation?: ValidationResult;
+  validationUnavailable?: string;
 }
 
 interface TrackRecordResponse {
@@ -89,7 +90,8 @@ export const aiService = {
         consensus: data.consensus,
         risk: data.risk,
         scan: data.scan,
-        validation: data.validation
+        validation: data.validation,
+        validationUnavailable: data.validationUnavailable
       };
     } catch (error) {
       console.error("Forecast Error:", error);
