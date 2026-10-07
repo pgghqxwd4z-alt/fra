@@ -28,7 +28,9 @@ from .lenses import lens_instructions
 from .market import fetch_market_data, fetch_ohlcv_series, normalize_timeframe, resolve_instrument
 from .providers import AIProvider, SafeMessageError, normalize_validator
 from .research import fetch_market_research, fetch_validation_research
+from .retry import retry_with_backoff
 from .risk import calculate_risk
+from .synthesis import run_synthesis, select_lens_forecast
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -436,23 +438,36 @@ async def annotate(payload: dict[str, Any]) -> Any:
         ]
         market_context = "\n\n".join(part for part in context_parts if part)
         knowledge = await retrieve_knowledge_with_library(prompt, lenses, retrieval_context)
-        instructions = "\n".join(lens_instructions(lenses))
         engines = consensus_engines()
         use_consensus = consensus_enabled() and len(engines) >= 2
         if not use_consensus:
             engines = [provider.name]
-        forecast_tasks = [
-            provider.annotate(
-                payload.get("base64Image", ""),
-                prompt,
-                lenses,
-                market_context,
-                instructions,
-                knowledge,
-                engine=engine,
+        per_lens = len(lenses) >= 2
+        if per_lens:
+            # Multi-lens analysis is intentionally kept on the primary engine; the
+            # existing cross-engine consensus path remains unchanged for one lens.
+            attempt_specs = [(provider.name, lens) for lens in lenses]
+        else:
+            attempt_specs = [(engine, None) for engine in engines]
+        forecast_tasks = []
+        for engine, lens in attempt_specs:
+            call_lenses = [lens] if lens else lenses
+            instructions = "\n".join(lens_instructions(call_lenses))
+            forecast_tasks.append(
+                retry_with_backoff(
+                    lambda engine=engine, call_lenses=call_lenses, instructions=instructions: provider.annotate(
+                        payload.get("base64Image", ""),
+                        prompt,
+                        call_lenses,
+                        market_context,
+                        instructions,
+                        knowledge,
+                        engine=engine,
+                    ),
+                    engine,
+                    "analyst annotate",
+                )
             )
-            for engine in engines
-        ]
         scan_enabled = groq_scan_enabled() and provider.has_engine("groq")
         scan_attempt: Any = None
         if scan_enabled:
@@ -469,30 +484,68 @@ async def annotate(payload: dict[str, Any]) -> Any:
             if isinstance(scan_attempt, BaseException):
                 logger.warning("Groq scan failed: %s", scan_attempt)
         else:
-            if use_consensus:
+            if per_lens or use_consensus:
                 attempts = await asyncio.gather(*forecast_tasks, return_exceptions=True)
             else:
                 attempts = [await forecast_tasks[0]]
         successes: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
-        for engine, attempt in zip(engines, attempts):
+        success_lenses: list[tuple[str | None, str]] = []
+        for (engine, lens), attempt in zip(attempt_specs, attempts):
             if isinstance(attempt, Exception):
                 logger.warning("Consensus %s annotation failed: %s", engine, attempt)
-                failures.append(
-                    {
-                        "engine": engine,
-                        "error": str(attempt)
-                        if isinstance(attempt, SafeMessageError)
-                        else f"{engine} request failed",
-                    }
-                )
+                failure = {
+                    "engine": engine,
+                    "error": str(attempt)
+                    if isinstance(attempt, SafeMessageError)
+                    else f"{engine} request failed",
+                }
+                if lens:
+                    failure["lens"] = lens
+                failures.append(failure)
             else:
                 check_citations(attempt["forecast"])
                 successes.append(attempt)
+                success_lenses.append((lens, engine))
         if not successes:
             first_failure = next((attempt for attempt in attempts if isinstance(attempt, Exception)), RuntimeError("AI request failed"))
             raise first_failure
         consensus, result = build_consensus(successes, failures)
+        if per_lens:
+            lens_runs = []
+            for (lens, _engine), attempt in zip(success_lenses, successes):
+                forecast = attempt.get("forecast", {})
+                entry = forecast.get("entry") if isinstance(forecast.get("entry"), dict) else {}
+                lens_runs.append(
+                    {
+                        "lens": lens,
+                        "bias": forecast.get("bias"),
+                        "confidence": forecast.get("confidence"),
+                        "entryZone": entry.get("zone"),
+                        "invalidation": forecast.get("invalidation"),
+                    }
+                )
+            for failure in failures:
+                if isinstance(failure.get("lens"), str):
+                    lens_runs.append(
+                        {
+                            "lens": failure["lens"],
+                            "failed": failure["error"],
+                        }
+                    )
+            result["lensRuns"] = lens_runs
+        else:
+            selected_forecast = result.get("forecast", {})
+            selected_entry = selected_forecast.get("entry") if isinstance(selected_forecast.get("entry"), dict) else {}
+            result["lensRuns"] = [
+                {
+                    "lens": lenses[0] if lenses else "unknown",
+                    "bias": selected_forecast.get("bias"),
+                    "confidence": selected_forecast.get("confidence"),
+                    "entryZone": selected_entry.get("zone"),
+                    "invalidation": selected_forecast.get("invalidation"),
+                }
+            ]
         if not instrument:
             grounding_reason = "instrument not recognised"
         elif not timeframe:
@@ -512,6 +565,48 @@ async def annotate(payload: dict[str, Any]) -> Any:
         }
         raw_forecasts = [copy.deepcopy(model_result.get("forecast")) for model_result in successes]
         apply_consensus_cap(result, consensus)
+        if per_lens and len(successes) >= 2:
+            synthesis_inputs = [
+                {"lens": lens, "forecast": attempt.get("forecast", {})}
+                for (lens, _engine), attempt in zip(success_lenses, successes)
+                if lens
+            ]
+            try:
+                synthesis_result = await asyncio.wait_for(
+                    run_synthesis(provider, synthesis_inputs),
+                    timeout=25,
+                )
+                selected = select_lens_forecast(synthesis_result, synthesis_inputs)
+                selected_forecast = selected.get("forecast")
+                if not isinstance(selected_forecast, dict):
+                    raise ValueError("Synthesis selected an invalid forecast.")
+                confluence = synthesis_result.get("confluence")
+                if confluence not in {"STRONG", "MODERATE", "WEAK"}:
+                    confluence = "WEAK"
+                agreements = synthesis_result.get("agreements")
+                disagreements = synthesis_result.get("disagreements")
+                result["forecast"] = selected_forecast
+                result["synthesis"] = {
+                    "selectedLens": selected.get("lens"),
+                    "confluence": confluence,
+                    "agreements": agreements if isinstance(agreements, list) else [],
+                    "disagreements": disagreements if isinstance(disagreements, list) else [],
+                    "note": synthesis_result.get("note") if isinstance(synthesis_result.get("note"), str) else "",
+                    "engine": "claude",
+                }
+                if confluence == "WEAK":
+                    result["forecast"]["confidence"] = min(result["forecast"].get("confidence", 0), 55)
+                result["analysis"] = json.dumps(
+                    result["forecast"],
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Forecast synthesis timed out; continuing with existing selection.")
+                result["synthesisUnavailable"] = "forecast synthesis timed out"
+            except Exception as error:
+                logger.warning("Forecast synthesis failed: %s", error)
+                result["synthesisUnavailable"] = "forecast synthesis unavailable"
         grounding: dict[str, Any] | None = None
         if ohlcv_series:
             try:
@@ -599,13 +694,17 @@ async def annotate(payload: dict[str, Any]) -> Any:
                             result["validationResearch"] = validation_research.metadata
                         if validation_research.unavailable:
                             result["validationResearchUnavailable"] = validation_research.unavailable
-                    validation_payload = await provider.validate_forecast(
-                        payload.get("base64Image", ""),
-                        validator_forecast,
-                        lenses,
-                        market_context,
+                    validation_payload = await retry_with_backoff(
+                        lambda: provider.validate_forecast(
+                            payload.get("base64Image", ""),
+                            validator_forecast,
+                            lenses,
+                            market_context,
+                            validation_engine,
+                            validation_research_context,
+                        ),
                         validation_engine,
-                        validation_research_context,
+                        "forecast validation",
                     )
                     validation_result = apply_validation(
                         result,

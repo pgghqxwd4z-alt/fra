@@ -1004,7 +1004,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             async def create_claude_message(text_prompt: str) -> Any:
                 return await client.messages.create(
                     model=self.claude_model,
-                    max_tokens=4096,
+                    max_tokens=16384,
                     messages=[{"role": "user", "content": [
                         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
                         {"type": "text", "text": text_prompt},
@@ -1126,7 +1126,7 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
             async def create_claude_message(text_prompt: str) -> Any:
                 return await client.messages.create(
                     model=self.claude_model,
-                    max_tokens=4096,
+                    max_tokens=8192,
                     system=VALIDATOR_SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": [
                         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},

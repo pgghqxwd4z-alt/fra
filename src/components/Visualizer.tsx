@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, GroundingReport, MarketResearch, MarketVerification, Risk, ValidationResearch, ValidationResult } from '../types';
+import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, GroundingReport, LensRun, MarketResearch, MarketVerification, Risk, Synthesis, ValidationResearch, ValidationResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -169,6 +169,60 @@ const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> 
           {consensus.failures.map((failure) => <div key={failure.engine}>⚠ {failure.engine}: {failure.error}</div>)}
         </div>
       )}
+    </section>
+  );
+};
+
+const ConvergenceStrip: React.FC<{
+  synthesis?: Synthesis;
+  synthesisUnavailable?: string;
+  lensRuns?: LensRun[];
+  fullscreen?: boolean;
+}> = ({ synthesis, synthesisUnavailable, lensRuns = [], fullscreen = false }) => {
+  if (!synthesis && !synthesisUnavailable && lensRuns.length < 2) return null;
+  const confluenceClass = synthesis
+    ? {
+        STRONG: 'text-emerald-300',
+        MODERATE: 'text-amber-300',
+        WEAK: 'text-rose-300',
+      }[synthesis.confluence]
+    : 'text-slate-400';
+  return (
+    <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-violet-300' : 'text-[6px] font-bold uppercase tracking-widest text-violet-300'}>
+        Lens convergence
+      </div>
+      {synthesis && (
+        <>
+          <div className={`mt-2 font-mono ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+            Confluence: <span className={confluenceClass}>{synthesis.confluence}</span> · Primary: {synthesis.selectedLens}
+          </div>
+          {synthesis.note && <div className={`mt-1 text-slate-400 ${fullscreen ? 'text-sm' : 'text-[7px]'}`}>{synthesis.note}</div>}
+          {synthesis.agreements.map((agreement, index) => (
+            <div key={`agreement-${index}`} className={`mt-1 text-emerald-300/80 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+              Agree · {agreement.element}: {agreement.detail}
+            </div>
+          ))}
+          {synthesis.disagreements.map((disagreement, index) => (
+            <div key={`disagreement-${index}`} className={`mt-1 text-amber-300/80 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+              Divergence · {disagreement.element}: {disagreement.detail}
+            </div>
+          ))}
+        </>
+      )}
+      {lensRuns.length > 0 && (
+        <div className={`mt-2 flex flex-wrap gap-1.5 font-mono ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {lensRuns.map((run) => (
+            <span
+              key={run.lens}
+              className={run.failed ? 'rounded border border-white/10 px-1.5 py-0.5 text-white/40' : 'rounded border border-violet-400/20 bg-violet-400/5 px-1.5 py-0.5 text-slate-300'}
+            >
+              {run.lens}{run.failed ? ` — failed: ${run.failed}` : run.bias ? ` · ${run.bias}` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {synthesisUnavailable && <div className={`mt-2 text-white/40 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>Lens convergence unavailable — {synthesisUnavailable}</div>}
     </section>
   );
 };
@@ -466,6 +520,9 @@ const Visualizer: React.FC = () => {
   const [validationUnavailable, setValidationUnavailable] = useState<string | null>(null);
   const [validationResearch, setValidationResearch] = useState<ValidationResearch | null>(null);
   const [validationResearchUnavailable, setValidationResearchUnavailable] = useState<string | null>(null);
+  const [lensRuns, setLensRuns] = useState<LensRun[]>([]);
+  const [synthesis, setSynthesis] = useState<Synthesis | null>(null);
+  const [synthesisUnavailable, setSynthesisUnavailable] = useState<string | null>(null);
   const [scan, setScan] = useState<FastScan | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
@@ -532,6 +589,9 @@ const Visualizer: React.FC = () => {
       setValidationUnavailable(null);
       setValidationResearch(null);
       setValidationResearchUnavailable(null);
+      setLensRuns([]);
+      setSynthesis(null);
+      setSynthesisUnavailable(null);
       setScan(null);
       resetZoom();
     };
@@ -619,6 +679,9 @@ const Visualizer: React.FC = () => {
       setValidationUnavailable(result.validationUnavailable || null);
       setValidationResearch(result.validationResearch || null);
       setValidationResearchUnavailable(result.validationResearchUnavailable || null);
+      setLensRuns(result.lensRuns || []);
+      setSynthesis(result.synthesis || null);
+      setSynthesisUnavailable(result.synthesisUnavailable || null);
       setScan(result.scan || null);
       setShowOriginal(false);
     } catch (error) {
@@ -747,6 +810,9 @@ const Visualizer: React.FC = () => {
                       setValidationUnavailable(null);
                       setValidationResearch(null);
                       setValidationResearchUnavailable(null);
+                      setLensRuns([]);
+                      setSynthesis(null);
+                      setSynthesisUnavailable(null);
                       setScan(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
@@ -816,6 +882,11 @@ const Visualizer: React.FC = () => {
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
                 <FastScanLine scan={scan || undefined} />
                 <ConsensusStrip consensus={consensus || undefined} />
+                <ConvergenceStrip
+                  synthesis={synthesis || undefined}
+                  synthesisUnavailable={synthesisUnavailable || undefined}
+                  lensRuns={lensRuns}
+                />
                 <ValidationStrip
                   validation={validation || undefined}
                   unavailable={validationUnavailable || undefined}
@@ -985,6 +1056,12 @@ const Visualizer: React.FC = () => {
             )}
             <FastScanLine scan={scan || undefined} fullscreen />
             <ConsensusStrip consensus={consensus || undefined} fullscreen />
+            <ConvergenceStrip
+              synthesis={synthesis || undefined}
+              synthesisUnavailable={synthesisUnavailable || undefined}
+              lensRuns={lensRuns}
+              fullscreen
+            />
             <ValidationStrip
               validation={validation || undefined}
               unavailable={validationUnavailable || undefined}

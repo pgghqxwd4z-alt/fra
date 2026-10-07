@@ -13,7 +13,9 @@ import {
   ChartTimeframe,
   DataGrounding,
   GroundingReport,
-  ValidationResearch
+  ValidationResearch,
+  LensRun,
+  Synthesis
 } from "../types";
 
 interface ChatResponse {
@@ -35,6 +37,9 @@ interface AnnotateResponse {
   validationUnavailable?: string;
   validationResearch?: ValidationResearch;
   validationResearchUnavailable?: string;
+  lensRuns?: LensRun[];
+  synthesis?: Synthesis;
+  synthesisUnavailable?: string;
   dataGrounding?: DataGrounding;
   grounding?: GroundingReport;
 }
@@ -103,6 +108,9 @@ export const aiService = {
         validationUnavailable: data.validationUnavailable,
         validationResearch: data.validationResearch,
         validationResearchUnavailable: data.validationResearchUnavailable,
+        lensRuns: data.lensRuns,
+        synthesis: data.synthesis,
+        synthesisUnavailable: data.synthesisUnavailable,
         dataGrounding: data.dataGrounding,
         grounding: data.grounding
       };

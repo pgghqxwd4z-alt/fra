@@ -130,6 +130,30 @@ export interface ValidationResearch {
   fetchedAt?: string;
 }
 
+export interface LensRun {
+  lens: string;
+  bias?: MarketBias;
+  confidence?: number;
+  entryZone?: string;
+  invalidation?: string;
+  failed?: string;
+}
+
+export interface SynthesisAgreement {
+  element: string;
+  lenses: string[];
+  detail: string;
+}
+
+export interface Synthesis {
+  selectedLens: string;
+  confluence: 'STRONG' | 'MODERATE' | 'WEAK';
+  agreements: SynthesisAgreement[];
+  disagreements: SynthesisAgreement[];
+  note: string;
+  engine: string;
+}
+
 export type LiquidityType =
   | 'BUY_SIDE'
   | 'SELL_SIDE'

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .prompts import build_validation_research_prompt
+from .retry import retry_with_backoff
 
 
 logger = logging.getLogger("quantsage")
@@ -106,7 +107,14 @@ async def fetch_market_research(provider: Any, instrument: str | None) -> Resear
 
     label = _label_for(instrument)
     try:
-        result = await asyncio.wait_for(provider.research_market(label), timeout=25)
+        result = await asyncio.wait_for(
+            retry_with_backoff(
+                lambda: provider.research_market(label),
+                getattr(provider, "name", "unknown"),
+                "market research",
+            ),
+            timeout=25,
+        )
         if not isinstance(result, dict):
             raise ValueError("Market research returned a non-object result.")
         return _build_research_data(result, label, _timestamp())
@@ -188,7 +196,11 @@ async def fetch_validation_research(
     prompt = build_validation_research_prompt(label, bias or "", timeframe)
     try:
         result = await asyncio.wait_for(
-            provider.research_validation(prompt, engine),
+            retry_with_backoff(
+                lambda: provider.research_validation(prompt, engine),
+                engine,
+                "validation research",
+            ),
             timeout=25,
         )
         if not isinstance(result, dict):
