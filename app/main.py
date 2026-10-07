@@ -510,8 +510,9 @@ async def annotate(payload: dict[str, Any]) -> Any:
         if not successes:
             first_failure = next((attempt for attempt in attempts if isinstance(attempt, Exception)), RuntimeError("AI request failed"))
             raise first_failure
-        consensus, result = build_consensus(successes, failures)
         if per_lens:
+            consensus = None
+            result = successes[0]
             lens_runs = []
             for (lens, _engine), attempt in zip(success_lenses, successes):
                 forecast = attempt.get("forecast", {})
@@ -535,6 +536,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
                     )
             result["lensRuns"] = lens_runs
         else:
+            consensus, result = build_consensus(successes, failures)
             selected_forecast = result.get("forecast", {})
             selected_entry = selected_forecast.get("entry") if isinstance(selected_forecast.get("entry"), dict) else {}
             result["lensRuns"] = [
@@ -564,49 +566,79 @@ async def annotate(payload: dict[str, Any]) -> Any:
             "reason": grounding_reason,
         }
         raw_forecasts = [copy.deepcopy(model_result.get("forecast")) for model_result in successes]
-        apply_consensus_cap(result, consensus)
-        if per_lens and len(successes) >= 2:
+        if per_lens:
             synthesis_inputs = [
                 {"lens": lens, "forecast": attempt.get("forecast", {})}
                 for (lens, _engine), attempt in zip(success_lenses, successes)
                 if lens
             ]
-            try:
-                synthesis_result = await asyncio.wait_for(
-                    run_synthesis(provider, synthesis_inputs),
-                    timeout=25,
-                )
-                selected = select_lens_forecast(synthesis_result, synthesis_inputs)
-                selected_forecast = selected.get("forecast")
-                if not isinstance(selected_forecast, dict):
-                    raise ValueError("Synthesis selected an invalid forecast.")
-                confluence = synthesis_result.get("confluence")
-                if confluence not in {"STRONG", "MODERATE", "WEAK"}:
-                    confluence = "WEAK"
-                agreements = synthesis_result.get("agreements")
-                disagreements = synthesis_result.get("disagreements")
-                result["forecast"] = selected_forecast
-                result["synthesis"] = {
-                    "selectedLens": selected.get("lens"),
-                    "confluence": confluence,
-                    "agreements": agreements if isinstance(agreements, list) else [],
-                    "disagreements": disagreements if isinstance(disagreements, list) else [],
-                    "note": synthesis_result.get("note") if isinstance(synthesis_result.get("note"), str) else "",
-                    "engine": "claude",
-                }
-                if confluence == "WEAK":
-                    result["forecast"]["confidence"] = min(result["forecast"].get("confidence", 0), 55)
-                result["analysis"] = json.dumps(
-                    result["forecast"],
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Forecast synthesis timed out; continuing with existing selection.")
-                result["synthesisUnavailable"] = "forecast synthesis timed out"
-            except Exception as error:
-                logger.warning("Forecast synthesis failed: %s", error)
+            synthesis_verified = False
+            if len(synthesis_inputs) >= 2:
+                try:
+                    synthesis_result = await asyncio.wait_for(
+                        run_synthesis(provider, synthesis_inputs),
+                        timeout=25,
+                    )
+                    selected = select_lens_forecast(synthesis_result, synthesis_inputs)
+                    selected_forecast = selected.get("forecast")
+                    if not isinstance(selected_forecast, dict):
+                        raise ValueError("Synthesis selected an invalid forecast.")
+                    confluence = synthesis_result.get("confluence")
+                    if confluence not in {"STRONG", "MODERATE", "WEAK"}:
+                        confluence = "WEAK"
+                    agreements = synthesis_result.get("agreements")
+                    disagreements = synthesis_result.get("disagreements")
+                    note = synthesis_result.get("note") if isinstance(synthesis_result.get("note"), str) else ""
+                    result["forecast"] = selected_forecast
+                    result["synthesis"] = {
+                        "selectedLens": selected.get("lens"),
+                        "confluence": confluence,
+                        "agreements": agreements if isinstance(agreements, list) else [],
+                        "disagreements": disagreements if isinstance(disagreements, list) else [],
+                        "note": note,
+                        "engine": "claude",
+                    }
+                    summary = note.strip().rstrip(".")
+                    if not summary and isinstance(disagreements, list):
+                        summary = "; ".join(
+                            item.get("detail", "").strip().rstrip(".")
+                            for item in disagreements
+                            if isinstance(item, dict) and isinstance(item.get("detail"), str) and item.get("detail", "").strip()
+                        )
+                    if confluence in {"WEAK", "MODERATE"}:
+                        cap = 45 if confluence == "WEAK" else 60
+                        result["forecast"]["confidence"] = min(result["forecast"].get("confidence", 0), cap)
+                        result["forecast"].setdefault("warnings", []).append(
+                            f"Lens convergence {confluence.lower()}: {summary or 'lens analyses did not fully converge'}."
+                        )
+                    synthesis_verified = True
+                except asyncio.TimeoutError:
+                    logger.warning("Forecast synthesis timed out; continuing with existing selection.")
+                    result["synthesisUnavailable"] = "forecast synthesis timed out"
+                except Exception as error:
+                    logger.warning("Forecast synthesis failed: %s", error)
+                    result["synthesisUnavailable"] = "forecast synthesis unavailable"
+            else:
                 result["synthesisUnavailable"] = "forecast synthesis unavailable"
+            if not synthesis_verified:
+                result["forecast"]["confidence"] = min(result["forecast"].get("confidence", 0), 60)
+                result["forecast"].setdefault("warnings", []).append(
+                    "Lens convergence unverified: synthesis unavailable."
+                )
+            for failure in failures:
+                lens = failure.get("lens")
+                if isinstance(lens, str):
+                    reason = failure["error"].rstrip(".")
+                    result["forecast"].setdefault("warnings", []).append(
+                        f"Lens {lens} failed: {reason}."
+                    )
+            result["analysis"] = json.dumps(
+                result["forecast"],
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        else:
+            apply_consensus_cap(result, consensus)
         grounding: dict[str, Any] | None = None
         if ohlcv_series:
             try:
@@ -631,17 +663,21 @@ async def annotate(payload: dict[str, Any]) -> Any:
         validation_engine: str | None = None
         validation_cross_provider = False
         if validator_enabled():
-            selected_engine = consensus.get("selectedEngine")
+            selected_engine = provider.name if per_lens else consensus.get("selectedEngine")
             successful_engines = [
                 model_result.get("engine")
                 for model_result in successes
                 if isinstance(model_result.get("engine"), str)
             ]
-            failed_engines = {
-                failure["engine"]
-                for failure in consensus.get("failures", [])
-                if isinstance(failure.get("engine"), str)
-            }
+            failed_engines = (
+                set()
+                if per_lens
+                else {
+                    failure["engine"]
+                    for failure in consensus.get("failures", [])
+                    if isinstance(failure.get("engine"), str)
+                }
+            )
             configured_engines = consensus_engines()
             if isinstance(selected_engine, str):
                 preferred_validator = os.getenv("VALIDATOR_ENGINE", "claude").strip().lower()
@@ -764,8 +800,28 @@ async def annotate(payload: dict[str, Any]) -> Any:
                     f"validator:{validation_engine}",
                     consensus,
                 )
-            selected_engine = consensus.get("selectedEngine")
-            selected_forecast_id = forecast_ids_by_engine.get(selected_engine)
+            if per_lens:
+                selected_lens = (
+                    result.get("synthesis", {}).get("selectedLens")
+                    if isinstance(result.get("synthesis"), dict)
+                    else None
+                )
+                selected_index = next(
+                    (
+                        index
+                        for index, (lens, _engine) in enumerate(success_lenses)
+                        if lens == selected_lens
+                    ),
+                    0,
+                )
+                selected_forecast_id = (
+                    forecast_ids[selected_index]
+                    if selected_index < len(forecast_ids)
+                    else None
+                )
+            else:
+                selected_engine = consensus.get("selectedEngine")
+                selected_forecast_id = forecast_ids_by_engine.get(selected_engine)
             if selected_forecast_id:
                 result["forecastId"] = selected_forecast_id
         except Exception as error:
