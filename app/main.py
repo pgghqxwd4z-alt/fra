@@ -605,11 +605,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
                         lenses,
                         market_context,
                         validation_engine,
-                        **(
-                            {"validation_research": validation_research_context}
-                            if validation_research_context
-                            else {}
-                        ),
+                        validation_research_context,
                     )
                     validation_result = apply_validation(
                         result,
