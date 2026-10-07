@@ -470,24 +470,7 @@ const Visualizer: React.FC = () => {
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
   const [timeframe, setTimeframe] = useState<ChartTimeframe>('15m');
-  const [prompt, setPrompt] = useState(`
-Forecast the most likely next price move.
-
-Identify:
-- Current directional bias
-- Next liquidity event
-- Expected liquidity target
-- Expected retracement
-- Highest-probability entry zone
-- Invalidation
-- TP1
-- TP2
-- Final target
-
-Do not summarize what has already happened.
-
-Focus primarily on the future price path from the current market state.
-`);
+  const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
   const [processing, setProcessing] = useState(false);
   const [isOver, setIsOver] = useState(false);
   const [coords, setCoords] = useState({ x: 0, y: 0 });
