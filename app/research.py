@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .prompts import build_validation_research_prompt
+
 
 logger = logging.getLogger("quantsage")
 
@@ -25,6 +27,13 @@ INSTRUMENT_LABELS = {
 class ResearchData:
     context: str
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ValidationResearchData:
+    context: str
+    metadata: dict[str, Any]
+    unavailable: str | None = None
 
 
 def _label_for(instrument: str) -> str:
@@ -106,3 +115,88 @@ async def fetch_market_research(provider: Any, instrument: str | None) -> Resear
     except Exception as error:
         logger.warning("Market research failed (%s); continuing without external research.", error)
     return None
+
+
+def _build_validation_research_data(
+    result: dict[str, Any],
+    engine: str,
+    fetched_at: str,
+) -> ValidationResearchData:
+    summary = result.get("summary") if isinstance(result.get("summary"), str) else ""
+    events = result.get("events") if isinstance(result.get("events"), list) else []
+    supporting = result.get("supporting") if isinstance(result.get("supporting"), list) else []
+    contradicting = result.get("contradicting") if isinstance(result.get("contradicting"), list) else []
+    sources = result.get("sources") if isinstance(result.get("sources"), list) else []
+    event_lines = [
+        f"{item.get('name', '')} — {item.get('whenUtc', '') or 'time unknown'} — {item.get('impact', 'MEDIUM')}"
+        for item in events
+        if isinstance(item, dict) and item.get("name")
+    ]
+    supporting_lines = [str(item) for item in supporting if isinstance(item, str) and item.strip()]
+    contradicting_lines = [str(item) for item in contradicting if isinstance(item, str) and item.strip()]
+    source_lines = [
+        f"{item.get('title', item.get('url', ''))} — {item.get('url', '')}"
+        for item in sources
+        if isinstance(item, dict) and item.get("url")
+    ]
+    def section_lines(label: str, values: list[str]) -> list[str]:
+        return [f"{label}: {values[0]}", *values[1:]] if values else [f"{label}: none found"]
+
+    context_lines = [
+        "INDEPENDENT EVENT & NEWS CHECK (fetched by the validator, separate from the analyst's research)",
+        f"Backdrop: {summary or 'No current news backdrop found.'}",
+        *section_lines("Scheduled events", event_lines),
+        *section_lines("Supporting the stated bias", supporting_lines),
+        *section_lines("Contradicting the stated bias", contradicting_lines),
+        *section_lines("Sources", source_lines),
+    ]
+    metadata = {
+        "summary": summary,
+        "events": events,
+        "supporting": supporting_lines,
+        "contradicting": contradicting_lines,
+        "sources": sources,
+        "engine": engine,
+        "fetchedAt": fetched_at,
+    }
+    return ValidationResearchData(context="\n".join(context_lines), metadata=metadata)
+
+
+async def fetch_validation_research(
+    provider: Any,
+    instrument: str | None,
+    timeframe: str | None,
+    bias: str | None,
+    engine: str,
+) -> ValidationResearchData | None:
+    enabled = os.getenv("VALIDATION_RESEARCH_ENABLED", "1").strip().lower()
+    if enabled in {"0", "false", "no"}:
+        logger.warning("Validation research is disabled; continuing without independent research.")
+        return None
+    if not instrument:
+        logger.warning("No resolved instrument for validation research; continuing without independent research.")
+        return None
+    has_engine = getattr(provider, "has_engine", None)
+    if callable(has_engine) and not has_engine(engine):
+        logger.warning("Validation research client for %s is unavailable; continuing without independent research.", engine)
+        return None
+    if not callable(has_engine) and getattr(provider, "client", None) is None:
+        logger.warning("Validation research provider client is unavailable; continuing without independent research.")
+        return None
+
+    label = _label_for(instrument)
+    prompt = build_validation_research_prompt(label, bias or "", timeframe)
+    try:
+        result = await asyncio.wait_for(
+            provider.research_validation(prompt, engine),
+            timeout=25,
+        )
+        if not isinstance(result, dict):
+            raise ValueError("Validation research returned a non-object result.")
+        return _build_validation_research_data(result, engine, _timestamp())
+    except asyncio.TimeoutError:
+        logger.warning("Validation research timed out; continuing without independent research.")
+        return ValidationResearchData("", {}, "validator research timed out")
+    except Exception as error:
+        logger.warning("Validation research failed (%s); continuing without independent research.", error)
+        return ValidationResearchData("", {}, "validator research unavailable")

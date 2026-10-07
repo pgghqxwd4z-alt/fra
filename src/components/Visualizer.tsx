@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, GroundingReport, MarketResearch, MarketVerification, Risk, ValidationResult } from '../types';
+import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, GroundingReport, MarketResearch, MarketVerification, Risk, ValidationResearch, ValidationResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
@@ -173,14 +173,55 @@ const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> 
   );
 };
 
-const ValidationStrip: React.FC<{ validation?: ValidationResult; unavailable?: string; fullscreen?: boolean }> = ({ validation, unavailable, fullscreen = false }) => {
-  if (!validation && !unavailable) return null;
+const ValidationResearchLine: React.FC<{
+  research?: ValidationResearch;
+  unavailable?: string;
+  fullscreen?: boolean;
+}> = ({ research, unavailable, fullscreen = false }) => {
+  if (!research && !unavailable) return null;
+  return (
+    <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} mt-2 space-y-1 font-mono`}>
+      {research && (
+        <>
+          <div className="text-sky-300/80">Validator news check: {research.summary || 'No current news backdrop found.'}</div>
+          {research.events.filter((event) => event.impact === 'HIGH').map((event, index) => (
+            <div key={`${event.name}-${index}`} className="text-amber-300/80">
+              HIGH event: {event.name} — {event.whenUtc || 'time unknown'}
+            </div>
+          ))}
+          {research.contradicting.map((item, index) => (
+            <div key={`${item}-${index}`} className="text-rose-300/80">Contradicts bias: {item}</div>
+          ))}
+        </>
+      )}
+      {unavailable && <div className="text-white/40">Validator news check unavailable — {unavailable}</div>}
+    </div>
+  );
+};
+
+const ValidationStrip: React.FC<{
+  validation?: ValidationResult;
+  unavailable?: string;
+  validationResearch?: ValidationResearch;
+  validationResearchUnavailable?: string;
+  fullscreen?: boolean;
+}> = ({
+  validation,
+  unavailable,
+  validationResearch,
+  validationResearchUnavailable,
+  fullscreen = false,
+}) => {
+  if (!validation && !unavailable && !validationResearch && !validationResearchUnavailable) return null;
   if (!validation) {
     return (
       <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
-        <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-slate-400' : 'text-[6px] font-bold uppercase tracking-widest text-slate-400'}>
-          Forecast validation unavailable — {unavailable}
-        </div>
+        {unavailable && (
+          <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-slate-400' : 'text-[6px] font-bold uppercase tracking-widest text-slate-400'}>
+            Forecast validation unavailable — {unavailable}
+          </div>
+        )}
+        <ValidationResearchLine research={validationResearch} unavailable={validationResearchUnavailable} fullscreen={fullscreen} />
       </section>
     );
   }
@@ -218,6 +259,7 @@ const ValidationStrip: React.FC<{ validation?: ValidationResult; unavailable?: s
           ))}
         </div>
       )}
+      <ValidationResearchLine research={validationResearch} unavailable={validationResearchUnavailable} fullscreen={fullscreen} />
     </section>
   );
 };
@@ -422,6 +464,8 @@ const Visualizer: React.FC = () => {
   const [consensus, setConsensus] = useState<Consensus | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [validationUnavailable, setValidationUnavailable] = useState<string | null>(null);
+  const [validationResearch, setValidationResearch] = useState<ValidationResearch | null>(null);
+  const [validationResearchUnavailable, setValidationResearchUnavailable] = useState<string | null>(null);
   const [scan, setScan] = useState<FastScan | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
@@ -503,6 +547,8 @@ Focus primarily on the future price path from the current market state.
       setMarketResearch(null);
       setValidation(null);
       setValidationUnavailable(null);
+      setValidationResearch(null);
+      setValidationResearchUnavailable(null);
       setScan(null);
       resetZoom();
     };
@@ -588,6 +634,8 @@ Focus primarily on the future price path from the current market state.
       setConsensus(result.consensus || null);
       setValidation(result.validation || null);
       setValidationUnavailable(result.validationUnavailable || null);
+      setValidationResearch(result.validationResearch || null);
+      setValidationResearchUnavailable(result.validationResearchUnavailable || null);
       setScan(result.scan || null);
       setShowOriginal(false);
     } catch (error) {
@@ -714,6 +762,8 @@ Focus primarily on the future price path from the current market state.
                       setConsensus(null);
                       setValidation(null);
                       setValidationUnavailable(null);
+                      setValidationResearch(null);
+                      setValidationResearchUnavailable(null);
                       setScan(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
@@ -783,7 +833,12 @@ Focus primarily on the future price path from the current market state.
                 {marketResearch && <MarketResearchSummary research={marketResearch} />}
                 <FastScanLine scan={scan || undefined} />
                 <ConsensusStrip consensus={consensus || undefined} />
-                <ValidationStrip validation={validation || undefined} unavailable={validationUnavailable || undefined} />
+                <ValidationStrip
+                  validation={validation || undefined}
+                  unavailable={validationUnavailable || undefined}
+                  validationResearch={validationResearch || undefined}
+                  validationResearchUnavailable={validationResearchUnavailable || undefined}
+                />
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
@@ -947,7 +1002,13 @@ Focus primarily on the future price path from the current market state.
             )}
             <FastScanLine scan={scan || undefined} fullscreen />
             <ConsensusStrip consensus={consensus || undefined} fullscreen />
-            <ValidationStrip validation={validation || undefined} unavailable={validationUnavailable || undefined} fullscreen />
+            <ValidationStrip
+              validation={validation || undefined}
+              unavailable={validationUnavailable || undefined}
+              validationResearch={validationResearch || undefined}
+              validationResearchUnavailable={validationResearchUnavailable || undefined}
+              fullscreen
+            />
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>

@@ -28,6 +28,49 @@ Return JSON only using the supplied schema.
 """
 
 
+VALIDATION_RESEARCH_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["events", "supporting", "contradicting", "summary"],
+    "properties": {
+        "events": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "whenUtc", "impact"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "whenUtc": {"type": "string"},
+                    "impact": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+                },
+            },
+        },
+        "supporting": {"type": "array", "maxItems": 4, "items": {"type": "string"}},
+        "contradicting": {"type": "array", "maxItems": 4, "items": {"type": "string"}},
+        "summary": {"type": "string"},
+    },
+}
+
+
+def build_validation_research_prompt(label: str, bias: str, timeframe: str | None) -> str:
+    horizon = f"the next {timeframe} session" if timeframe else "the next trading session"
+    return f"""You are fact-checking a trading forecast, not producing one.
+
+Instrument: {label}
+Forecast directional bias under review: {bias or "unstated"}
+Forecast horizon: {horizon}
+
+Search the web for current information and return JSON only:
+- events: scheduled high-impact releases or decisions for this instrument within the next 48 hours (name, time in UTC, impact).
+- supporting: headlines or confirmed facts from the last 24 hours that support the stated bias.
+- contradicting: headlines or confirmed facts from the last 24 hours that contradict the stated bias.
+- summary: one sentence on the current news backdrop.
+
+Report only what you actually found. Do not predict prices, do not state price levels, and leave a list empty rather than filling it with speculation."""
+
+
 EXTERNAL_RESEARCH_VERIFICATION = """
 ==================================================
 EXTERNAL RESEARCH VERIFICATION

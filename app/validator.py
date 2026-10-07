@@ -69,6 +69,9 @@ Hard limits on what you may do:
 - A forecast element whose cited footprint is not visible on the chart is REJECTED. A populated forecast element with no citation is also REJECTED; the rejection reason must name the unsupported element. You may not propose or correct levels.
 - When a REAL OHLCV DATA block is present, a forecast level that matches no candle open/high/low/close in that series and is not directly computed from them is REJECTED as ungrounded. Name the level in the reason. You may not propose or correct levels.
 - The deterministic grounding checks above are code output, not claims: treat an OUT_OF_WINDOW level as REJECTED and an UNMATCHED level as at best UNVERIFIABLE. You may not propose or correct levels.
+- When an INDEPENDENT EVENT & NEWS CHECK block is present, it is news evidence only. You may use it to rule on the forecast's stated narrative, fundamental or event claims, and to raise event risk — you may NEVER use it to reject, move or propose a price level.
+- A confirmed HIGH-impact scheduled event inside the forecast horizon that the forecast does not account for is a DOWNGRADE-level finding at most: confidencePenalty for that finding alone may not exceed 15.
+- A directional bias explicitly contradicted by a confirmed fact in the news check is a REJECTED finding; a merely absent or ambiguous backdrop is UNVERIFIABLE, never REJECTED.
 
 Rulings:
 - VERIFIED: the chart or the supplied data supports the claim as stated.
@@ -89,6 +92,7 @@ def build_validator_prompt(
     forecast: dict[str, Any],
     lenses: list[str],
     market_context: str,
+    validation_research: str | None = None,
 ) -> str:
     rules = [LENS_VALIDATOR_RULES[lens] for lens in lenses if lens in LENS_VALIDATOR_RULES]
     rule_block = "\n\n".join(rules) if rules else LENS_VALIDATOR_RULES["ppa"]
@@ -144,12 +148,17 @@ def build_validator_prompt(
     ]
     forecast_block = "\n".join(f"{label}: {value}" for label, value in fields if value not in (None, ""))
     market_block = market_context.strip() or "NO LIVE MARKET DATA SUPPLIED."
-    grounding_section = f"\n\n{grounding_block}" if grounding_block else ""
+    grounding_section = f"\n{grounding_block}" if grounding_block else ""
+    validation_research_section = (
+        f"\n{validation_research.strip()}"
+        if isinstance(validation_research, str) and validation_research.strip()
+        else ""
+    )
     return f"""FRAMEWORK RULES TO ENFORCE:
 {rule_block}
 
 FORECAST UNDER REVIEW (produced by another model from the same chart):
-{forecast_block}{grounding_section}
+{forecast_block}{grounding_section}{validation_research_section}
 
 LIVE MARKET DATA AND RESEARCH CONTEXT:
 {market_block}

@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 
 from .prompts import (
     FORECAST_SYSTEM_PROMPT,
+    VALIDATION_RESEARCH_SCHEMA,
     build_forecast_prompt,
     build_research_prompt,
     build_retrieval_prompt,
@@ -825,38 +826,67 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             "sources": sources,
         }
 
-    async def research_market(self, label: str, engine: str | None = None) -> dict[str, Any]:
+    @staticmethod
+    def _map_research_grounding(engine: str, grounding: Any) -> list[dict[str, dict[str, str]]]:
+        if engine == "gemini":
+            return map_gemini_grounding(grounding)
+        if engine == "claude":
+            return map_claude_grounding(grounding)
+        if engine == "groq":
+            return map_groq_grounding(grounding)
+        return map_openai_grounding(grounding)
+
+    @staticmethod
+    def _research_sources(grounding: list[dict[str, dict[str, str]]]) -> list[dict[str, str]]:
+        sources: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in grounding:
+            web = item.get("web") if isinstance(item, dict) else None
+            uri = web.get("uri") if isinstance(web, dict) else None
+            if not isinstance(uri, str) or uri in seen:
+                continue
+            seen.add(uri)
+            sources.append({"title": str(web.get("title") or uri), "url": uri})
+            if len(sources) == 6:
+                break
+        return sources
+
+    async def _web_research(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        engine: str | None = None,
+    ) -> tuple[dict[str, Any], Any]:
         engine_name = engine or self.name
-        research_prompt = build_research_prompt(label)
         if engine_name == "gemini":
             client = self._require_gemini()
             search = await self._gemini_search(
                 client,
-                f"Search current {label} market headlines from the last 48 hours and upcoming events. Include current sources.",
+                f"Search current information needed for this task and include current sources.\n\n{prompt}",
             )
             source_material = search.text or "No web search material was returned."
             result = await self._gemini_json(
                 client,
-                f"""{research_prompt}
+                f"""{prompt}
 
 WEB SEARCH MATERIAL:
 {source_material}
 
 Convert the material above into the requested JSON schema. Return JSON only.""",
-                RESEARCH_SCHEMA,
+                schema,
                 include_schema=True,
             )
             text = result.text or ""
             if not text:
                 raise SafeMessageError("No response text from model")
-            return self.map_research_result(parse_json_object(text), map_gemini_grounding(search))
+            return parse_json_object(text), search
         if engine_name == "claude":
             client = self._require_claude()
             search_result = await client.messages.create(
                 model=self.claude_model,
                 max_tokens=4096,
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                messages=[{"role": "user", "content": research_prompt}],
+                messages=[{"role": "user", "content": prompt}],
             )
             source_material = _claude_text(search_result) or "No web search material was returned."
             result = await client.messages.create(
@@ -865,7 +895,7 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
                 messages=[
                     {
                         "role": "user",
-                        "content": f"""{research_prompt}
+                        "content": f"""{prompt}
 
 WEB SEARCH MATERIAL:
 {source_material}
@@ -873,33 +903,33 @@ WEB SEARCH MATERIAL:
 Convert the material above into the requested JSON schema. Return JSON only.""",
                     }
                 ],
-                output_config={"format": {"type": "json_schema", "schema": RESEARCH_SCHEMA}},
+                output_config={"format": {"type": "json_schema", "schema": _to_claude_schema(schema)}},
             )
             text = _claude_text(result)
             if not text:
                 raise SafeMessageError("No response text from model")
-            return self.map_research_result(parse_json_object(text), map_claude_grounding(search_result))
+            return parse_json_object(text), search_result
         client = self._require_openai(engine_name)
         if engine_name == "groq":
             result = await client.chat.completions.create(
                 model=self.groq_model,
-                messages=[{"role": "user", "content": research_prompt}],
+                messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
             )
             text = result.choices[0].message.content
             if not text:
                 raise SafeMessageError("No response text from model")
-            return self.map_research_result(parse_json_object(text), map_groq_grounding(result))
+            return parse_json_object(text), result
 
         search_result = await client.responses.create(
             model=self.openai_model,
             tools=[{"type": "web_search"}],
-            input=research_prompt,
+            input=prompt,
         )
         source_material = search_result.output_text or "No web search material was returned."
         result = await client.responses.create(
             model=self.openai_model,
-            input=f"""{research_prompt}
+            input=f"""{prompt}
 
 WEB SEARCH MATERIAL:
 {source_material}
@@ -908,15 +938,32 @@ Convert the material above into the requested JSON schema. Return JSON only.""",
             text={
                 "format": {
                     "type": "json_schema",
-                    "name": "market_research",
+                    "name": "web_research",
                     "strict": True,
-                    "schema": RESEARCH_SCHEMA,
+                    "schema": schema,
                 }
             },
         )
         if not result.output_text:
             raise SafeMessageError("No response text from model")
-        return self.map_research_result(json.loads(result.output_text), map_openai_grounding(search_result))
+        return json.loads(result.output_text), search_result
+
+    async def research_market(self, label: str, engine: str | None = None) -> dict[str, Any]:
+        engine_name = engine or self.name
+        parsed, grounding = await self._web_research(build_research_prompt(label), RESEARCH_SCHEMA, engine_name)
+        return self.map_research_result(
+            parsed,
+            self._map_research_grounding(engine_name, grounding),
+        )
+
+    async def research_validation(self, prompt: str, engine: str | None = None) -> dict[str, Any]:
+        engine_name = engine or self.name
+        parsed, grounding = await self._web_research(prompt, VALIDATION_RESEARCH_SCHEMA, engine_name)
+        result = dict(parsed) if isinstance(parsed, dict) else {}
+        result["sources"] = self._research_sources(
+            self._map_research_grounding(engine_name, grounding),
+        )
+        return result
 
     async def annotate(
         self,
@@ -1053,8 +1100,9 @@ Return JSON only. Escape all quotes inside string values. Do not include prose o
         lenses: list[str],
         market_context: str,
         engine: str,
+        validation_research: str | None = None,
     ) -> dict[str, Any]:
-        validator_prompt = build_validator_prompt(forecast, lenses, market_context)
+        validator_prompt = build_validator_prompt(forecast, lenses, market_context, validation_research)
         if engine == "gemini":
             client = self._require_gemini()
             contents = [

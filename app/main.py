@@ -27,7 +27,7 @@ from .library import search_library
 from .lenses import lens_instructions
 from .market import fetch_market_data, fetch_ohlcv_series, normalize_timeframe, resolve_instrument
 from .providers import AIProvider, SafeMessageError, normalize_validator
-from .research import fetch_market_research
+from .research import fetch_market_research, fetch_validation_research
 from .risk import calculate_risk
 
 load_dotenv()
@@ -585,12 +585,31 @@ async def annotate(payload: dict[str, Any]) -> Any:
                     validator_forecast = copy.deepcopy(result["forecast"])
                     if grounding:
                         validator_forecast["_grounding"] = grounding
+                    validation_research = await fetch_validation_research(
+                        provider,
+                        instrument,
+                        timeframe,
+                        result["forecast"].get("bias"),
+                        validation_engine,
+                    )
+                    validation_research_context = None
+                    if validation_research:
+                        validation_research_context = validation_research.context or None
+                        if validation_research.metadata:
+                            result["validationResearch"] = validation_research.metadata
+                        if validation_research.unavailable:
+                            result["validationResearchUnavailable"] = validation_research.unavailable
                     validation_payload = await provider.validate_forecast(
                         payload.get("base64Image", ""),
                         validator_forecast,
                         lenses,
                         market_context,
                         validation_engine,
+                        **(
+                            {"validation_research": validation_research_context}
+                            if validation_research_context
+                            else {}
+                        ),
                     )
                     validation_result = apply_validation(
                         result,

@@ -109,6 +109,27 @@ export interface GroundingReport {
   findings: GroundingFinding[];
 }
 
+export interface ValidationResearchEvent {
+  name: string;
+  whenUtc: string;
+  impact: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface ValidationResearchSource {
+  title: string;
+  url: string;
+}
+
+export interface ValidationResearch {
+  summary: string;
+  events: ValidationResearchEvent[];
+  supporting: string[];
+  contradicting: string[];
+  sources: ValidationResearchSource[];
+  engine?: string;
+  fetchedAt?: string;
+}
+
 export type LiquidityType =
   | 'BUY_SIDE'
   | 'SELL_SIDE'
