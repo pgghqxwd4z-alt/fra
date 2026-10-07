@@ -1,11 +1,349 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { aiService } from '../services/aiService';
-import { ForecastResult } from '../types';
+import { ChartTimeframe, Consensus, DataGrounding, FastScan, ForecastResult, GroundingReport, LensRun, MarketResearch, MarketVerification, Risk, Synthesis, ValidationResearch, ValidationResult } from '../types';
 
 type AnalysisLens = 'smc' | 'gs' | 'psych' | 'ppa';
 
 const nonEmpty = (value: string | undefined | null) => value?.trim() || null;
 const sentence = (value: string | undefined | null) => nonEmpty(value)?.replace(/[.!?]+$/, '') || null;
+
+const verificationTime = (asOf: string) => {
+  const date = new Date(asOf);
+  return Number.isNaN(date.getTime()) ? asOf : `${date.toISOString().slice(11, 16)} UTC`;
+};
+
+const sourceHost = (uri: string) => {
+  try {
+    return new URL(uri).hostname.replace(/^www\./i, '');
+  } catch {
+    return uri;
+  }
+};
+
+const marketSourceLabels = {
+  oanda: 'Oanda',
+  twelvedata: 'Twelve Data',
+  yahoo: 'Yahoo',
+} as const;
+
+const MarketVerificationLine: React.FC<{
+  verification: MarketVerification;
+  fullscreen?: boolean;
+}> = ({ verification, fullscreen = false }) => (
+  <div className={fullscreen ? 'text-xs text-emerald-300/70 font-mono' : 'text-[7px] text-emerald-300/70 font-mono'}>
+    Verified vs {marketSourceLabels[verification.source]} {verification.instrument}{verification.proxy ? ' (proxy)' : ''} · last {verification.lastClose} · {verificationTime(verification.asOf)}
+  </div>
+);
+
+const DataGroundingLine: React.FC<{
+  grounding: DataGrounding;
+  fullscreen?: boolean;
+}> = ({ grounding, fullscreen = false }) => (
+  <div className={fullscreen ? 'text-xs font-mono' : 'text-[7px] font-mono'}>
+    {grounding.grounded ? (
+      <span className="text-emerald-300/70">
+        Grounded · {grounding.candles} × {grounding.timeframe} candles{grounding.source ? ` · ${marketSourceLabels[grounding.source]}` : ''}{grounding.proxy ? ' (proxy)' : ''}
+      </span>
+    ) : (
+      <span className="text-amber-300/80">
+        Not grounded — levels read from the image only ({grounding.reason || 'no candle feed available for this symbol and timeframe'})
+      </span>
+    )}
+  </div>
+);
+
+const GroundingReportLine: React.FC<{
+  report: GroundingReport;
+  fullscreen?: boolean;
+}> = ({ report, fullscreen = false }) => {
+  const findings = report.findings.filter((finding) => finding.status !== 'GROUNDED');
+  return (
+    <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} font-mono space-y-0.5`}>
+      {report.checked === 0 ? (
+        <div className="text-white/40">No numeric levels to check</div>
+      ) : (
+        <div className={report.grounded === report.checked ? 'text-emerald-300/70' : 'text-amber-300/80'}>
+          Levels checked: {report.grounded}/{report.checked} match real candles (±{report.tolerancePct.toFixed(2)}%)
+        </div>
+      )}
+      {findings.map((finding, index) => (
+        <div
+          key={`${finding.label}-${finding.level}-${index}`}
+          className={finding.status === 'UNTOUCHED' ? 'text-white/40' : 'text-amber-300/80'}
+        >
+          {finding.label} {finding.level} — {finding.detail}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const MarketResearchSummary: React.FC<{
+  research: MarketResearch;
+  fullscreen?: boolean;
+}> = ({ research, fullscreen = false }) => {
+  const nextEvent = research.upcomingEvents[0];
+  return (
+    <div className={fullscreen ? 'text-xs text-sky-300/70 font-mono' : 'text-[7px] text-sky-300/70 font-mono'}>
+      Research: {research.headlines.length} headlines · {research.biasSignal}
+      {nextEvent && ` · next ${nextEvent.name} ${nextEvent.whenUtc || 'time TBC'}`}
+    </div>
+  );
+};
+
+const FastScanLine: React.FC<{ scan?: FastScan; fullscreen?: boolean }> = ({ scan, fullscreen = false }) => {
+  if (!scan) return null;
+  const levels = scan.keyLevels.length ? scan.keyLevels.join(', ') : 'no key levels';
+  return (
+    <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} text-slate-500 font-mono truncate`} title={scan.note}>
+      Fast scan (preliminary — not part of consensus) · {scan.bias} · Levels {levels} · {scan.note}
+    </div>
+  );
+};
+
+const MarketResearchHeadlines: React.FC<{ research: MarketResearch }> = ({ research }) => (
+  <div className="mt-2 space-y-1 text-xs text-sky-200/80 font-mono">
+    {research.headlines.slice(0, 3).map((headline, index) => {
+      const text = `${headline.impact} · ${headline.publishedAt || 'time unknown'} · ${headline.title}`;
+      return headline.url ? (
+        <a key={`${headline.url}-${index}`} href={headline.url} target="_blank" rel="noreferrer noopener" className="block hover:text-sky-200 hover:underline">
+          {text}
+        </a>
+      ) : (
+        <div key={`${headline.title}-${index}`}>{text}</div>
+      );
+    })}
+  </div>
+);
+
+const MarketResearchSources: React.FC<{ research: MarketResearch }> = ({ research }) => {
+  if (!research.sources.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-sky-200/80 font-mono">
+      <span>Sources:</span>
+      {research.sources.slice(0, 4).map((source) => (
+        <a key={source.uri} href={source.uri} target="_blank" rel="noreferrer noopener" className="hover:text-sky-200 hover:underline">
+          {sourceHost(source.uri)}
+        </a>
+      ))}
+    </div>
+  );
+};
+
+const ConsensusStrip: React.FC<{ consensus?: Consensus; fullscreen?: boolean }> = ({ consensus, fullscreen = false }) => {
+  if (!consensus) return null;
+  const badgeClass = {
+    AGREE: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+    PARTIAL: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+    CONFLICT: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
+    SINGLE: 'border-slate-400/30 bg-slate-400/10 text-slate-300',
+    MAJORITY: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+  }[consensus.verdict];
+  return (
+    <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className="flex items-center justify-between gap-3">
+        <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-emerald-400' : 'text-[6px] font-bold uppercase tracking-widest text-emerald-400'}>
+          Model consensus
+        </div>
+        <span className={`rounded-full border px-2 py-0.5 font-mono font-bold ${fullscreen ? 'text-xs' : 'text-[7px]'} ${badgeClass}`}>
+          {consensus.verdict}{consensus.vote && ` · ${consensus.vote.support}/${consensus.vote.total}`}
+        </span>
+      </div>
+      <div className={fullscreen ? 'mt-3 space-y-2' : 'mt-2 space-y-1'}>
+        {consensus.models.map((model) => (
+          <div key={model.engine} className={`flex flex-wrap gap-x-3 gap-y-1 font-mono text-slate-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+            <span className={model.engine === consensus.selectedEngine ? 'font-bold text-emerald-300' : 'text-white'}>
+              {model.engine === consensus.selectedEngine && '● '}{model.engine}
+            </span>
+            <span>{model.bias}/{model.direction}</span>
+            <span>{model.confidence}%</span>
+            {fullscreen && <span>TP1 {model.tp1}</span>}
+            {fullscreen && <span>Invalidation {model.invalidation}</span>}
+            {fullscreen && <span>Next: {model.nextMove}</span>}
+          </div>
+        ))}
+      </div>
+      {consensus.notes && <p className={`mt-2 text-slate-400 ${fullscreen ? 'text-sm' : 'text-[7px]'}`}>{consensus.notes}</p>}
+      {consensus.failures.length > 0 && (
+        <div className={`mt-2 space-y-1 text-rose-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {consensus.failures.map((failure) => <div key={failure.engine}>⚠ {failure.engine}: {failure.error}</div>)}
+        </div>
+      )}
+    </section>
+  );
+};
+
+const ConvergenceStrip: React.FC<{
+  synthesis?: Synthesis;
+  synthesisUnavailable?: string;
+  lensRuns?: LensRun[];
+  fullscreen?: boolean;
+}> = ({ synthesis, synthesisUnavailable, lensRuns = [], fullscreen = false }) => {
+  if (!synthesis && !synthesisUnavailable && lensRuns.length < 2) return null;
+  const confluenceClass = synthesis
+    ? {
+        STRONG: 'text-emerald-300',
+        MODERATE: 'text-amber-300',
+        WEAK: 'text-rose-300',
+      }[synthesis.confluence]
+    : 'text-slate-400';
+  return (
+    <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-violet-300' : 'text-[6px] font-bold uppercase tracking-widest text-violet-300'}>
+        Lens convergence
+      </div>
+      {synthesis && (
+        <>
+          <div className={`mt-2 font-mono ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+            Confluence: <span className={confluenceClass}>{synthesis.confluence}</span> · Primary: {synthesis.selectedLens}
+          </div>
+          {synthesis.note && <div className={`mt-1 text-slate-400 ${fullscreen ? 'text-sm' : 'text-[7px]'}`}>{synthesis.note}</div>}
+          {synthesis.agreements.map((agreement, index) => (
+            <div key={`agreement-${index}`} className={`mt-1 text-emerald-300/80 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+              Agree · {agreement.element}: {agreement.detail}
+            </div>
+          ))}
+          {synthesis.disagreements.map((disagreement, index) => (
+            <div key={`disagreement-${index}`} className={`mt-1 text-amber-300/80 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+              Divergence · {disagreement.element}: {disagreement.detail}
+            </div>
+          ))}
+        </>
+      )}
+      {lensRuns.length > 0 && (
+        <div className={`mt-2 flex flex-wrap gap-1.5 font-mono ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {lensRuns.map((run) => (
+            <span
+              key={run.lens}
+              className={run.failed ? 'rounded border border-white/10 px-1.5 py-0.5 text-white/40' : 'rounded border border-violet-400/20 bg-violet-400/5 px-1.5 py-0.5 text-slate-300'}
+            >
+              {run.lens}{run.failed ? ` — failed: ${run.failed}` : run.bias ? ` · ${run.bias}` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {synthesisUnavailable && <div className={`mt-2 text-white/40 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>Lens convergence unavailable — {synthesisUnavailable}</div>}
+    </section>
+  );
+};
+
+const ValidationResearchLine: React.FC<{
+  research?: ValidationResearch;
+  unavailable?: string;
+  fullscreen?: boolean;
+}> = ({ research, unavailable, fullscreen = false }) => {
+  if (!research && !unavailable) return null;
+  return (
+    <div className={`${fullscreen ? 'text-xs' : 'text-[7px]'} mt-2 space-y-1 font-mono`}>
+      {research && (
+        <>
+          <div className="text-sky-300/80">Validator news check: {research.summary || 'No current news backdrop found.'}</div>
+          {research.events.filter((event) => event.impact === 'HIGH').map((event, index) => (
+            <div key={`${event.name}-${index}`} className="text-amber-300/80">
+              HIGH event: {event.name} — {event.whenUtc || 'time unknown'}
+            </div>
+          ))}
+          {research.contradicting.map((item, index) => (
+            <div key={`${item}-${index}`} className="text-rose-300/80">Contradicts bias: {item}</div>
+          ))}
+        </>
+      )}
+      {unavailable && <div className="text-white/40">Validator news check unavailable — {unavailable}</div>}
+    </div>
+  );
+};
+
+const ValidationStrip: React.FC<{
+  validation?: ValidationResult;
+  unavailable?: string;
+  validationResearch?: ValidationResearch;
+  validationResearchUnavailable?: string;
+  fullscreen?: boolean;
+}> = ({
+  validation,
+  unavailable,
+  validationResearch,
+  validationResearchUnavailable,
+  fullscreen = false,
+}) => {
+  if (!validation && !unavailable && !validationResearch && !validationResearchUnavailable) return null;
+  if (!validation) {
+    return (
+      <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+        {unavailable && (
+          <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-slate-400' : 'text-[6px] font-bold uppercase tracking-widest text-slate-400'}>
+            Forecast validation unavailable — {unavailable}
+          </div>
+        )}
+        <ValidationResearchLine research={validationResearch} unavailable={validationResearchUnavailable} fullscreen={fullscreen} />
+      </section>
+    );
+  }
+  const badgeClass = {
+    PASS: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+    DOWNGRADE: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+    REJECT: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
+  }[validation.verdict];
+  const findingClass = {
+    VERIFIED: 'text-emerald-300/80',
+    REJECTED: 'text-rose-300',
+    UNVERIFIABLE: 'text-slate-400',
+  } as const;
+  return (
+    <section className={fullscreen ? 'my-6 rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'mb-3 rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className="flex items-center justify-between gap-3">
+        <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-sky-300' : 'text-[6px] font-bold uppercase tracking-widest text-sky-300'}>
+          Forecast validation
+        </div>
+        <span className={`rounded-full border px-2 py-0.5 font-mono font-bold ${fullscreen ? 'text-xs' : 'text-[7px]'} ${badgeClass}`}>
+          {validation.verdict}
+        </span>
+      </div>
+      <div className={`mt-2 font-mono text-slate-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+        Validator: {validation.engine}{!validation.crossProvider && ' (self-validated)'} · Chart {validation.chartAgreement}
+        {validation.confidencePenalty > 0 && ` · −${validation.confidencePenalty}% confidence`}
+      </div>
+      {validation.note && <p className={`mt-2 text-slate-400 ${fullscreen ? 'text-sm' : 'text-[7px]'}`}>{validation.note}</p>}
+      {validation.findings.length > 0 && (
+        <div className={`mt-2 space-y-1 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {validation.findings.map((finding, index) => (
+            <div key={`${finding.claim}-${index}`} className={findingClass[finding.ruling]}>
+              {finding.ruling === 'REJECTED' ? '⚠' : '•'} {finding.claim}: {finding.reason}
+            </div>
+          ))}
+        </div>
+      )}
+      <ValidationResearchLine research={validationResearch} unavailable={validationResearchUnavailable} fullscreen={fullscreen} />
+    </section>
+  );
+};
+
+const RiskSummary: React.FC<{ risk?: Risk; fullscreen?: boolean }> = ({ risk, fullscreen = false }) => {
+  if (!risk) return null;
+  if (!risk.parsed) {
+    return <div className={fullscreen ? 'text-sm text-slate-500' : 'text-[7px] text-slate-500'}>Levels not numeric</div>;
+  }
+  const targets = risk.targets || {};
+  const format = (value: number | null | undefined) => value == null ? '—' : value.toFixed(2);
+  return (
+    <section className={fullscreen ? 'rounded-2xl border border-white/10 bg-slate-900/50 p-5' : 'rounded-lg border border-white/5 bg-black/20 p-2.5'}>
+      <div className={fullscreen ? 'text-[10px] font-bold uppercase tracking-[0.25em] text-emerald-400' : 'text-[6px] font-bold uppercase tracking-widest text-emerald-400'}>
+        Risk
+      </div>
+      <div className={fullscreen ? 'mt-3 grid grid-cols-4 gap-3 text-xs font-mono text-slate-300' : 'mt-2 grid grid-cols-4 gap-1.5 text-[7px] font-mono text-slate-300'}>
+        <span>R {format(risk.risk)}</span>
+        <span>TP1 {format(targets.tp1?.rr)}R</span>
+        <span>TP2 {format(targets.tp2?.rr)}R</span>
+        <span>Final {format(targets.final?.rr)}R</span>
+      </div>
+      {risk.warnings.length > 0 && (
+        <div className={`mt-2 space-y-1 text-rose-300 ${fullscreen ? 'text-xs' : 'text-[7px]'}`}>
+          {risk.warnings.map((warning) => <div key={warning}>⚠ {warning}</div>)}
+        </div>
+      )}
+    </section>
+  );
+};
 
 const ForecastDetails: React.FC<{
   forecast: ForecastResult;
@@ -38,8 +376,14 @@ const ForecastDetails: React.FC<{
     nonEmpty(forecast.retracement?.zone),
     nonEmpty(forecast.retracement?.reason),
   ].filter(Boolean).join(' · ');
-  const evidence = (forecast.structuralEvidence || []).map(nonEmpty).filter(Boolean) as string[];
-  const warnings = (forecast.warnings || []).map(nonEmpty).filter(Boolean) as string[];
+  const evidence = (forecast.structuralEvidence || []).filter((item) => item?.id?.trim()).map((item) => (
+    `${item.id} · ${item.type} ${item.level} — ${item.basis}`
+  ));
+  const unsupported = (forecast.unsupported || []).map(nonEmpty).filter(Boolean) as string[];
+  const unsupportedSet = new Set(unsupported);
+  const warnings = (forecast.warnings || [])
+    .map(nonEmpty)
+    .filter((warning): warning is string => Boolean(warning) && !unsupportedSet.has(warning));
 
   const Field: React.FC<{ label: string; value: string | null }> = ({ label, value }) => {
     if (!value) return null;
@@ -104,6 +448,8 @@ const ForecastDetails: React.FC<{
         </div>
       )}
 
+      <RiskSummary risk={forecast.risk} fullscreen={!compact} />
+
       {evidence.length > 0 && (
         <section className={sectionClass}>
           <div className={sectionTitleClass}>Structural Evidence</div>
@@ -125,6 +471,14 @@ const ForecastDetails: React.FC<{
         <section className={compact ? 'space-y-1' : 'space-y-2'}>
           {warnings.map((warning, index) => (
             <div key={index} className="text-[8px] text-rose-400/80">⚠ {warning}</div>
+          ))}
+        </section>
+      )}
+
+      {unsupported.length > 0 && (
+        <section className={compact ? 'space-y-1' : 'space-y-2'}>
+          {unsupported.map((warning, index) => (
+            <div key={index} className="text-[8px] text-amber-300/90">⚠ {warning}</div>
           ))}
         </section>
       )}
@@ -157,26 +511,23 @@ const Visualizer: React.FC = () => {
   const [showOriginal, setShowOriginal] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [forecast, setForecast] = useState<ForecastResult | null>(null);
+  const [marketVerification, setMarketVerification] = useState<MarketVerification | null>(null);
+  const [dataGrounding, setDataGrounding] = useState<DataGrounding | null>(null);
+  const [grounding, setGrounding] = useState<GroundingReport | null>(null);
+  const [marketResearch, setMarketResearch] = useState<MarketResearch | null>(null);
+  const [consensus, setConsensus] = useState<Consensus | null>(null);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validationUnavailable, setValidationUnavailable] = useState<string | null>(null);
+  const [validationResearch, setValidationResearch] = useState<ValidationResearch | null>(null);
+  const [validationResearchUnavailable, setValidationResearchUnavailable] = useState<string | null>(null);
+  const [lensRuns, setLensRuns] = useState<LensRun[]>([]);
+  const [synthesis, setSynthesis] = useState<Synthesis | null>(null);
+  const [synthesisUnavailable, setSynthesisUnavailable] = useState<string | null>(null);
+  const [scan, setScan] = useState<FastScan | null>(null);
   const [isForecastFullscreen, setIsForecastFullscreen] = useState(false);
   const [selectedLenses, setSelectedLenses] = useState<AnalysisLens[]>(['smc']);
-  const [prompt, setPrompt] = useState(`
-Forecast the most likely next price move.
-
-Identify:
-- Current directional bias
-- Next liquidity event
-- Expected liquidity target
-- Expected retracement
-- Highest-probability entry zone
-- Invalidation
-- TP1
-- TP2
-- Final target
-
-Do not summarize what has already happened.
-
-Focus primarily on the future price path from the current market state.
-`);
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>('15m');
+  const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
   const [processing, setProcessing] = useState(false);
   const [isOver, setIsOver] = useState(false);
   const [coords, setCoords] = useState({ x: 0, y: 0 });
@@ -230,6 +581,18 @@ Focus primarily on the future price path from the current market state.
       setImage(event.target?.result as string);
       setResultImage(null);
       setAnalysis(null);
+      setMarketVerification(null);
+      setDataGrounding(null);
+      setGrounding(null);
+      setMarketResearch(null);
+      setValidation(null);
+      setValidationUnavailable(null);
+      setValidationResearch(null);
+      setValidationResearchUnavailable(null);
+      setLensRuns([]);
+      setSynthesis(null);
+      setSynthesisUnavailable(null);
+      setScan(null);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -303,10 +666,23 @@ Focus primarily on the future price path from the current market state.
     setProcessing(true);
     try {
       const base64 = image.split(',')[1];
-      const result = await aiService.annotateChart(base64, prompt, selectedLenses);
+      const result = await aiService.annotateChart(base64, prompt, selectedLenses, timeframe);
       setResultImage(result.image);
       setAnalysis(result.analysis);
-      setForecast(result.forecast);
+      setForecast(result.forecast ? { ...result.forecast, risk: result.risk } : null);
+      setMarketVerification(result.marketVerification || null);
+      setDataGrounding(result.dataGrounding || null);
+      setGrounding(result.grounding || null);
+      setMarketResearch(result.marketResearch || null);
+      setConsensus(result.consensus || null);
+      setValidation(result.validation || null);
+      setValidationUnavailable(result.validationUnavailable || null);
+      setValidationResearch(result.validationResearch || null);
+      setValidationResearchUnavailable(result.validationResearchUnavailable || null);
+      setLensRuns(result.lensRuns || []);
+      setSynthesis(result.synthesis || null);
+      setSynthesisUnavailable(result.synthesisUnavailable || null);
+      setScan(result.scan || null);
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
@@ -425,6 +801,19 @@ Focus primarily on the future price path from the current market state.
                       setResultImage(null);
                       setAnalysis(null);
                       setForecast(null);
+                      setMarketVerification(null);
+                      setDataGrounding(null);
+                      setGrounding(null);
+                      setMarketResearch(null);
+                      setConsensus(null);
+                      setValidation(null);
+                      setValidationUnavailable(null);
+                      setValidationResearch(null);
+                      setValidationResearchUnavailable(null);
+                      setLensRuns([]);
+                      setSynthesis(null);
+                      setSynthesisUnavailable(null);
+                      setScan(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
@@ -487,6 +876,23 @@ Focus primarily on the future price path from the current market state.
                   </div>
                 </div>
 
+                {marketVerification && <MarketVerificationLine verification={marketVerification} />}
+                {dataGrounding && <DataGroundingLine grounding={dataGrounding} />}
+                {grounding && <GroundingReportLine report={grounding} />}
+                {marketResearch && <MarketResearchSummary research={marketResearch} />}
+                <FastScanLine scan={scan || undefined} />
+                <ConsensusStrip consensus={consensus || undefined} />
+                <ConvergenceStrip
+                  synthesis={synthesis || undefined}
+                  synthesisUnavailable={synthesisUnavailable || undefined}
+                  lensRuns={lensRuns}
+                />
+                <ValidationStrip
+                  validation={validation || undefined}
+                  unavailable={validationUnavailable || undefined}
+                  validationResearch={validationResearch || undefined}
+                  validationResearchUnavailable={validationResearchUnavailable || undefined}
+                />
                 <ForecastDetails forecast={forecast} variant="compact" />
               </div>
             )}
@@ -523,6 +929,21 @@ Focus primarily on the future price path from the current market state.
                   );
                 })}
               </div>
+              <label className="flex items-center justify-between gap-2 text-[7px] font-bold uppercase tracking-widest text-white/40">
+                <span>Chart TF</span>
+                <select
+                  value={timeframe}
+                  onChange={(e) => setTimeframe(e.target.value as ChartTimeframe)}
+                  className="bg-black/40 border border-white/10 rounded-md px-1.5 py-1 text-[8px] font-mono text-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                  aria-label="Chart timeframe matching uploaded chart"
+                >
+                  <option value="5m">5m</option>
+                  <option value="15m">15m</option>
+                  <option value="1h">1h</option>
+                  <option value="4h">4h</option>
+                  <option value="1d">1d</option>
+                </select>
+              </label>
               <div className="space-y-2 pt-1">
                 <textarea
                   value={prompt}
@@ -623,6 +1044,31 @@ Focus primarily on the future price path from the current market state.
                 <div className="flex items-center lg:justify-end gap-3 text-xs font-mono tracking-widest text-white/30">{forecast.confidence}% CONFIDENCE RATING</div>
               </div>
             </div>
+            {marketVerification && <MarketVerificationLine verification={marketVerification} fullscreen />}
+            {dataGrounding && <DataGroundingLine grounding={dataGrounding} fullscreen />}
+            {grounding && <GroundingReportLine report={grounding} fullscreen />}
+            {marketResearch && (
+              <>
+                <MarketResearchSummary research={marketResearch} fullscreen />
+                <MarketResearchHeadlines research={marketResearch} />
+                <MarketResearchSources research={marketResearch} />
+              </>
+            )}
+            <FastScanLine scan={scan || undefined} fullscreen />
+            <ConsensusStrip consensus={consensus || undefined} fullscreen />
+            <ConvergenceStrip
+              synthesis={synthesis || undefined}
+              synthesisUnavailable={synthesisUnavailable || undefined}
+              lensRuns={lensRuns}
+              fullscreen
+            />
+            <ValidationStrip
+              validation={validation || undefined}
+              unavailable={validationUnavailable || undefined}
+              validationResearch={validationResearch || undefined}
+              validationResearchUnavailable={validationResearchUnavailable || undefined}
+              fullscreen
+            />
             <ForecastDetails forecast={forecast} variant="fullscreen" />
           </div>
         </div>

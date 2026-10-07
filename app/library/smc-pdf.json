@@ -1,0 +1,106 @@
+{
+  "sourceId": "smc-pdf",
+  "title": "Smart Money Concept Trading Strategy",
+  "kind": "DOCUMENT",
+  "attribution": "User-supplied PDF (Smart-Money-Concept-trading-strategy-PDF). Entries are condensed paraphrases, not reproductions.",
+  "entries": [
+    {
+      "id": "smc-pdf-premise",
+      "section": "What the Smart Money Concept is",
+      "tags": ["smc", "structure", "institutional", "premise"],
+      "principle": "SMC is a theory rather than a mechanical strategy: it reads supply, demand and market structure on the assumption that large participants leave identifiable footprints, and positions with those footprints instead of against them.",
+      "application": "Treat an SMC read as a framework for locating institutional intent, not as a signal generator; a setup with no identifiable footprint is not an SMC setup."
+    },
+    {
+      "id": "smc-pdf-order-blocks",
+      "section": "Order blocks",
+      "tags": ["smc", "order-block", "supply-demand", "structure"],
+      "principle": "An order block is a zone where large participants accumulated or distributed size through many orders to avoid moving price against themselves; it typically appears on the chart as a range or consolidation before a directional move.",
+      "application": "Locate the consolidation that preceded the displacement leg and treat that zone, not the impulse candle body, as the reference area. Order-block identification from price alone is inferential — the document notes that confirming it properly needs level-2 or volume data the chart does not carry."
+    },
+    {
+      "id": "smc-pdf-breaker-blocks",
+      "section": "Breaker blocks",
+      "tags": ["smc", "breaker-block", "order-block", "stop-run"],
+      "principle": "A breaker block is an order block that failed to hold price in the prevailing trend; the break through that support or resistance is read as stop orders being triggered rather than as a genuine continuation.",
+      "application": "When a former order block is broken and price then reclaims it, treat the failed zone as a reaction level in the opposite direction rather than assuming the break was real."
+    },
+    {
+      "id": "smc-pdf-fvg",
+      "section": "Fair value gaps",
+      "tags": ["smc", "fvg", "imbalance", "displacement"],
+      "principle": "A fair value gap is the imbalance left when price moves too quickly from one level to another; SMC treats such gaps as unfinished business that price is prone to revisit.",
+      "application": "Note where displacement left a gap and expect it as a candidate retracement target; a gap sitting just above a demand zone strengthens the case for price trading down into that zone first."
+    },
+    {
+      "id": "smc-pdf-bos",
+      "section": "Break of structure",
+      "tags": ["smc", "bos", "trend", "structure"],
+      "principle": "A break of structure occurs when price sets a new high or low that breaks the prior one, confirming continuation of the existing trend: lower highs and lower lows define a downtrend, higher highs and higher lows an uptrend.",
+      "application": "Use BOS to confirm the direction already in force; a BOS is continuation evidence, not a reversal signal."
+    },
+    {
+      "id": "smc-pdf-choch",
+      "section": "Change of character",
+      "tags": ["smc", "choch", "reversal", "structure"],
+      "principle": "A change of character is an abrupt shift in behaviour — volatility, participation or the rhythm of price action — that signals weakness in the current trend and a possible reversal, and is what marks a trend change rather than a single break.",
+      "application": "After a CHoCH, stop taking setups in the old direction and only act on entries aligned with the new one."
+    },
+    {
+      "id": "smc-pdf-liquidity",
+      "section": "Liquidity",
+      "tags": ["smc", "liquidity", "stops", "sweep"],
+      "principle": "Liquidity is where resting orders sit above or below price; the document names trendline liquidity, buy-side and sell-side liquidity, and equal highs and lows (double tops and bottoms) as the common pools.",
+      "application": "Identify the pool nearest to price and expect it to be taken before a continuation move; liquidity building beneath a bullish zone argues for a sweep into that zone rather than immediate continuation."
+    },
+    {
+      "id": "smc-pdf-step-trend",
+      "section": "Method — step 1: determine the trend",
+      "tags": ["smc", "trend", "structure", "method"],
+      "principle": "The method starts by establishing the primary trend from market structure alone, because trades taken in the direction structure has already confirmed are the ones on the right side of the market.",
+      "application": "State the structural trend before naming any level; if structure is unclear or conflicting across the visible timeframes, that ambiguity belongs in the read instead of a direction."
+    },
+    {
+      "id": "smc-pdf-step-order-block",
+      "section": "Method — step 2: high-probability order block",
+      "tags": ["smc", "order-block", "confluence", "method", "entry"],
+      "principle": "Among candidate order blocks, the high-probability one carries confluence: it caused the change of character in the intended direction, and it has liquidity and a fair value gap sitting immediately in front of it.",
+      "application": "Rank candidate zones by that confluence rather than by proximity to price, and prefer the zone whose lack of confluence is easiest to disprove."
+    },
+    {
+      "id": "smc-pdf-step-entry-exit",
+      "section": "Method — step 3: entry, stop and target",
+      "tags": ["smc", "entry", "invalidation", "target", "method"],
+      "principle": "Entry is placed at the edge of the chosen order block, the stop just beyond the far side of that zone, and the target at the structural high or low the move is expected to reach.",
+      "application": "Derive entry, invalidation and target from the same zone and the same structure so the three are geometrically consistent; an invalidation not tied to the zone that justified the entry is arbitrary."
+    },
+    {
+      "id": "smc-pdf-vs-price-action",
+      "section": "SMC versus price action",
+      "tags": ["smc", "price-action", "method", "interpretation"],
+      "principle": "SMC is built on price-action methodology but differs in intent: price-action traders read what price is doing, while SMC reads why, inferring intent from where institutional participants would need liquidity.",
+      "application": "Keep the two layers separate in a read — observable structure first, inferred intent second and labelled as inference."
+    },
+    {
+      "id": "smc-pdf-terminology",
+      "section": "SMC versus price action — terminology",
+      "tags": ["smc", "terminology", "liquidity-grab", "mitigation-block"],
+      "principle": "SMC labels — liquidity grab, mitigation block, breaker block — often re-describe conventional price-action events rather than adding new information.",
+      "application": "Use the label only when the underlying structure supports it; a term without the structure behind it adds vocabulary, not evidence."
+    },
+    {
+      "id": "smc-pdf-limits-evidence",
+      "section": "Criticism — lack of evidence",
+      "tags": ["smc", "limitations", "skepticism", "confidence"],
+      "principle": "The manipulation premise has no published evidence behind it, and retail resting orders are small relative to the capital of the participants said to hunt them, so the causal story SMC tells may be a narrative fitted to price after the fact.",
+      "application": "Do not raise confidence because a move fits the SMC narrative; the pattern being nameable is not evidence that it will repeat."
+    },
+    {
+      "id": "smc-pdf-limits-repackaging",
+      "section": "Criticism — repackaged price action",
+      "tags": ["smc", "limitations", "price-action"],
+      "principle": "The strongest defensible claim in the document is that SMC repackages price action, which inherits price action's track record rather than establishing its own.",
+      "application": "Where an SMC read and a plain structural read disagree, prefer the structural read; SMC adds framing, not an independent edge."
+    }
+  ]
+}

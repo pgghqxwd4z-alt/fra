@@ -1,6 +1,21 @@
 import {
   ForecastResult,
-  GroundingChunk
+  GroundingChunk,
+  MarketResearch,
+  MarketVerification,
+  ForecastRecord,
+  ForecastStats,
+  Consensus,
+  Risk,
+  FastScan,
+  KnowledgeResult,
+  ValidationResult,
+  ChartTimeframe,
+  DataGrounding,
+  GroundingReport,
+  ValidationResearch,
+  LensRun,
+  Synthesis
 } from "../types";
 
 interface ChatResponse {
@@ -13,6 +28,31 @@ interface AnnotateResponse {
   image: string | null;
   analysis: string;
   forecast: ForecastResult | null;
+  marketVerification?: MarketVerification;
+  marketResearch?: MarketResearch;
+  consensus?: Consensus;
+  risk?: Risk;
+  scan?: FastScan;
+  validation?: ValidationResult;
+  validationUnavailable?: string;
+  validationResearch?: ValidationResearch;
+  validationResearchUnavailable?: string;
+  lensRuns?: LensRun[];
+  synthesis?: Synthesis;
+  synthesisUnavailable?: string;
+  dataGrounding?: DataGrounding;
+  grounding?: GroundingReport;
+}
+
+interface TrackRecordResponse {
+  forecasts: ForecastRecord[];
+  stats: ForecastStats;
+}
+
+interface ScoreResponse {
+  scored: number;
+  pending: number;
+  skipped: number;
 }
 
 interface HistoryEntry {
@@ -40,13 +80,14 @@ export const aiService = {
   async annotateChart(
     base64Image: string,
     prompt: string,
-    lenses: string[] = ['smc']
+    lenses: string[] = ['smc'],
+    timeframe?: ChartTimeframe
   ): Promise<AnnotateResponse> {
     try {
       const response = await fetch("/api/annotate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base64Image, prompt, lenses })
+        body: JSON.stringify({ base64Image, prompt, lenses, timeframe })
       });
 
       if (!response.ok) {
@@ -57,12 +98,42 @@ export const aiService = {
       return {
         image: null,
         analysis: data.analysis,
-        forecast: data.forecast
+        forecast: data.forecast,
+        marketVerification: data.marketVerification,
+        marketResearch: data.marketResearch,
+        consensus: data.consensus,
+        risk: data.risk,
+        scan: data.scan,
+        validation: data.validation,
+        validationUnavailable: data.validationUnavailable,
+        validationResearch: data.validationResearch,
+        validationResearchUnavailable: data.validationResearchUnavailable,
+        lensRuns: data.lensRuns,
+        synthesis: data.synthesis,
+        synthesisUnavailable: data.synthesisUnavailable,
+        dataGrounding: data.dataGrounding,
+        grounding: data.grounding
       };
     } catch (error) {
       console.error("Forecast Error:", error);
       throw error;
     }
+  },
+
+  async searchKnowledge(
+    prompt: string,
+    lenses: string[] = ['smc'],
+    marketContext = ''
+  ): Promise<KnowledgeResult> {
+    const response = await fetch("/api/knowledge/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, lenses, marketContext })
+    });
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to search knowledge");
+    }
+    return response.json();
   },
 
   async chatWithGrounding(
@@ -89,6 +160,22 @@ export const aiService = {
       console.error("Chat Error:", error);
       throw error;
     }
+  },
+
+  async getTrackRecord(): Promise<TrackRecordResponse> {
+    const response = await fetch("/api/forecasts");
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to load track record");
+    }
+    return response.json();
+  },
+
+  async rescoreForecasts(): Promise<ScoreResponse> {
+    const response = await fetch("/api/forecasts/score", { method: "POST" });
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to score forecasts");
+    }
+    return response.json();
   }
 
 };

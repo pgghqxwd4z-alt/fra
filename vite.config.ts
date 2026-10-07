@@ -13,10 +13,15 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      port: 3000,
+      port: Number(env.PORT || process.env.PORT || 3000),
       host: '0.0.0.0',
       hmr: env.DISABLE_HMR === 'false',
       allowedHosts: process.env.ALLOWED_HOSTS ? process.env.ALLOWED_HOSTS.split(',') : undefined,
+      proxy: {
+        '/api': {
+          target: env.BACKEND_URL || `http://localhost:${env.BACKEND_PORT || 8000}`,
+        },
+      },
     },
   };
 });
