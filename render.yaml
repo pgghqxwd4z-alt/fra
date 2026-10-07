@@ -32,7 +32,7 @@ services:
       - key: CONSENSUS_ENGINES
         value: claude
       - key: APP_USERNAME
-        value: user
+        value: francis
       - key: APP_PASSWORD
         sync: false
       - key: TRUST_PROXY
