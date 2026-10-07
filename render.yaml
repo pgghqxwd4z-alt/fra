@@ -6,7 +6,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: AI_PROVIDER
-        value: openai
+        value: claude
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -30,7 +30,7 @@ services:
       - key: CONSENSUS_ENABLED
         value: "1"
       - key: CONSENSUS_ENGINES
-        value: openai,claude,gemini
+        value: claude
       - key: APP_USERNAME
         value: user
       - key: APP_PASSWORD
