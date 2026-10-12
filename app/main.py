@@ -110,23 +110,25 @@ class AccessMiddleware:
                 await self._send_json(send, {"error": "Request body too large."}, 413)
                 return
 
-            now = time.monotonic()
-            identity = client_identity(scope, headers)
-            sweep_rate_windows(now)
-            window = rate_windows.get(identity)
-            if window is None:
-                if len(rate_windows) >= RATE_LIMIT_MAX_IDENTITIES:
-                    rate_windows.popitem(last=False)
-                window = deque()
-                rate_windows[identity] = window
-            else:
-                rate_windows.move_to_end(identity)
-            while window and window[0] <= now - RATE_LIMIT_WINDOW:
-                window.popleft()
-            if len(window) >= RATE_LIMIT_QUOTA:
-                await self._send_json(send, {"error": "Rate limit exceeded."}, 429)
-                return
-            window.append(now)
+            status_poll = scope.get("method") == "GET" and path.startswith("/api/annotate/")
+            if not status_poll:
+                now = time.monotonic()
+                identity = client_identity(scope, headers)
+                sweep_rate_windows(now)
+                window = rate_windows.get(identity)
+                if window is None:
+                    if len(rate_windows) >= RATE_LIMIT_MAX_IDENTITIES:
+                        rate_windows.popitem(last=False)
+                    window = deque()
+                    rate_windows[identity] = window
+                else:
+                    rate_windows.move_to_end(identity)
+                while window and window[0] <= now - RATE_LIMIT_WINDOW:
+                    window.popleft()
+                if len(window) >= RATE_LIMIT_QUOTA:
+                    await self._send_json(send, {"error": "Rate limit exceeded."}, 429)
+                    return
+                window.append(now)
 
             total = 0
             sent = False
@@ -499,10 +501,7 @@ async def run_annotation(payload: dict[str, Any], job: AnalysisJob | None = None
             engine: str,
             call_lenses: list[str],
             instructions: str,
-            stage_index: int,
         ) -> dict[str, Any]:
-            if per_lens:
-                set_job_stage(job, f"Analysing lens {stage_index}/{len(lenses)}")
             operation = retry_with_backoff(
                 lambda: provider.annotate(
                     payload.get("base64Image", ""),
@@ -521,7 +520,7 @@ async def run_annotation(payload: dict[str, Any], job: AnalysisJob | None = None
             except asyncio.TimeoutError as error:
                 raise SafeMessageError("analysis timed out") from error
 
-        for index, (engine, lens) in enumerate(attempt_specs, start=1):
+        for engine, lens in attempt_specs:
             call_lenses = [lens] if lens else lenses
             instructions = "\n".join(lens_instructions(call_lenses))
             forecast_tasks.append(
@@ -529,11 +528,11 @@ async def run_annotation(payload: dict[str, Any], job: AnalysisJob | None = None
                     engine,
                     call_lenses,
                     instructions,
-                    index,
                 )
             )
         scan_enabled = groq_scan_enabled() and provider.has_engine("groq")
         scan_attempt: Any = None
+        set_job_stage(job, f"Analysing {len(lenses)} lenses in parallel" if per_lens else "Analysing chart")
         if scan_enabled:
             gathered = await asyncio.gather(
                 *forecast_tasks,
