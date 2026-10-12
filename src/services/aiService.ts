@@ -1,6 +1,21 @@
 import {
   ForecastResult,
-  GroundingChunk
+  GroundingChunk,
+  MarketResearch,
+  MarketVerification,
+  ForecastRecord,
+  ForecastStats,
+  Consensus,
+  Risk,
+  FastScan,
+  KnowledgeResult,
+  ValidationResult,
+  ChartTimeframe,
+  DataGrounding,
+  GroundingReport,
+  ValidationResearch,
+  LensRun,
+  Synthesis
 } from "../types";
 
 interface ChatResponse {
@@ -13,6 +28,31 @@ interface AnnotateResponse {
   image: string | null;
   analysis: string;
   forecast: ForecastResult | null;
+  marketVerification?: MarketVerification;
+  marketResearch?: MarketResearch;
+  consensus?: Consensus;
+  risk?: Risk;
+  scan?: FastScan;
+  validation?: ValidationResult;
+  validationUnavailable?: string;
+  validationResearch?: ValidationResearch;
+  validationResearchUnavailable?: string;
+  lensRuns?: LensRun[];
+  synthesis?: Synthesis;
+  synthesisUnavailable?: string;
+  dataGrounding?: DataGrounding;
+  grounding?: GroundingReport;
+}
+
+interface TrackRecordResponse {
+  forecasts: ForecastRecord[];
+  stats: ForecastStats;
+}
+
+interface ScoreResponse {
+  scored: number;
+  pending: number;
+  skipped: number;
 }
 
 interface HistoryEntry {
@@ -35,34 +75,110 @@ const throwResponseError = async (response: Response, fallback: string): Promise
   throw new Error(message);
 };
 
+const mapAnnotateResponse = (data: any): AnnotateResponse => ({
+  image: null,
+  analysis: data.analysis,
+  forecast: data.forecast,
+  marketVerification: data.marketVerification,
+  marketResearch: data.marketResearch,
+  consensus: data.consensus,
+  risk: data.risk,
+  scan: data.scan,
+  validation: data.validation,
+  validationUnavailable: data.validationUnavailable,
+  validationResearch: data.validationResearch,
+  validationResearchUnavailable: data.validationResearchUnavailable,
+  lensRuns: data.lensRuns,
+  synthesis: data.synthesis,
+  synthesisUnavailable: data.synthesisUnavailable,
+  dataGrounding: data.dataGrounding,
+  grounding: data.grounding
+});
+
 export const aiService = {
 
   async annotateChart(
     base64Image: string,
     prompt: string,
-    lenses: string[] = ['smc']
+    lenses: string[] = ['smc'],
+    timeframe?: ChartTimeframe,
+    onStage?: (stage: string) => void
   ): Promise<AnnotateResponse> {
     try {
+      const startedAt = Date.now();
       const response = await fetch("/api/annotate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base64Image, prompt, lenses })
+        body: JSON.stringify({ base64Image, prompt, lenses, timeframe })
       });
 
       if (!response.ok) {
         await throwResponseError(response, "Failed to annotate chart");
       }
 
-      const data = await response.json();
-      return {
-        image: null,
-        analysis: data.analysis,
-        forecast: data.forecast
-      };
+      const job = await response.json();
+      if (typeof job?.jobId !== "string" || !job.jobId) {
+        throw new Error("Analysis job could not be started");
+      }
+
+      let consecutivePollFailures = 0;
+      let lastStage = "";
+      while (Date.now() - startedAt < 20 * 60 * 1000) {
+        let poll: any;
+        try {
+          const pollResponse = await fetch(`/api/annotate/${encodeURIComponent(job.jobId)}`);
+          if (!pollResponse.ok) {
+            await throwResponseError(pollResponse, "Failed to poll analysis");
+          }
+          poll = await pollResponse.json();
+          consecutivePollFailures = 0;
+        } catch (error) {
+          consecutivePollFailures += 1;
+          if (consecutivePollFailures >= 5) {
+            throw error;
+          }
+          const remaining = 20 * 60 * 1000 - (Date.now() - startedAt);
+          if (remaining <= 0) break;
+          await new Promise((resolve) => setTimeout(resolve, Math.min(2500, remaining)));
+          continue;
+        }
+        if (poll.status === "running") {
+          if (typeof poll.stage === "string" && poll.stage !== lastStage) {
+            lastStage = poll.stage;
+            onStage?.(poll.stage);
+          }
+        } else if (poll.status === "done") {
+          return mapAnnotateResponse(poll.result);
+        } else if (poll.status === "error") {
+          throw new Error(typeof poll.error === "string" ? poll.error : "AI request failed.");
+        } else {
+          throw new Error("Invalid analysis job status");
+        }
+        const remaining = 20 * 60 * 1000 - (Date.now() - startedAt);
+        if (remaining <= 0) break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(2500, remaining)));
+      }
+      throw new Error("Analysis timed out");
     } catch (error) {
       console.error("Forecast Error:", error);
       throw error;
     }
+  },
+
+  async searchKnowledge(
+    prompt: string,
+    lenses: string[] = ['smc'],
+    marketContext = ''
+  ): Promise<KnowledgeResult> {
+    const response = await fetch("/api/knowledge/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, lenses, marketContext })
+    });
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to search knowledge");
+    }
+    return response.json();
   },
 
   async chatWithGrounding(
@@ -89,6 +205,22 @@ export const aiService = {
       console.error("Chat Error:", error);
       throw error;
     }
+  },
+
+  async getTrackRecord(): Promise<TrackRecordResponse> {
+    const response = await fetch("/api/forecasts");
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to load track record");
+    }
+    return response.json();
+  },
+
+  async rescoreForecasts(): Promise<ScoreResponse> {
+    const response = await fetch("/api/forecasts/score", { method: "POST" });
+    if (!response.ok) {
+      await throwResponseError(response, "Failed to score forecasts");
+    }
+    return response.json();
   }
 
 };

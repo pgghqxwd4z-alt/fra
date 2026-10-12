@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AnalysisTab } from './types';
 import Sidebar from './components/Sidebar';
+import TrackRecord from './components/TrackRecord';
 import TradingSage from './components/TradingSage';
 import Visualizer from './components/Visualizer';
 import StrategyBoard from './components/StrategyBoard';
@@ -18,6 +19,8 @@ export default function App() {
         return <TradingSage />;
       case AnalysisTab.VISUALIZER:
         return <Visualizer />;
+      case AnalysisTab.TRACK_RECORD:
+        return <TrackRecord />;
       case AnalysisTab.STRATEGIES:
         return <StrategyBoard />;
       case AnalysisTab.WISDOM:
