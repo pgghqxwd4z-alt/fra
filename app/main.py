@@ -10,7 +10,9 @@ import json
 import logging
 import os
 import time
+import uuid
 from collections import OrderedDict, deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,9 @@ RATE_LIMIT_WINDOW = max(1, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
 RATE_LIMIT_QUOTA = max(1, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30")))
 RATE_LIMIT_MAX_IDENTITIES = max(1, int(os.getenv("RATE_LIMIT_MAX_IDENTITIES", "4096")))
 GROQ_SCAN_TIMEOUT_SECONDS = 15
+ANALYST_TIMEOUT_SECONDS = 240
+JOB_TTL_SECONDS = 30 * 60
+JOB_STORE_LIMIT = 32
 TRUST_PROXY_VALUE = os.getenv("TRUST_PROXY", "").strip().lower()
 try:
     TRUSTED_PROXY_HOPS = max(0, int(TRUST_PROXY_VALUE))
@@ -54,6 +59,19 @@ if not APP_PASSWORD:
     logger.warning("APP_PASSWORD is not set; HTTP Basic auth is disabled.")
 
 rate_windows: OrderedDict[str, deque[float]] = OrderedDict()
+
+
+@dataclass
+class AnalysisJob:
+    started_at: float
+    status: str = "running"
+    stage: str = "Starting analysis"
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    task: asyncio.Task[Any] | None = None
+
+
+analysis_jobs: dict[str, AnalysisJob] = {}
 
 
 class AccessMiddleware:
@@ -176,8 +194,35 @@ provider = AIProvider()
 
 
 def error_response(error: Exception) -> JSONResponse:
-    message = str(error) if isinstance(error, SafeMessageError) else "AI request failed."
+    message = safe_error_message(error)
     return JSONResponse({"error": message}, status_code=500)
+
+
+def safe_error_message(error: Exception) -> str:
+    return str(error) if isinstance(error, SafeMessageError) else "AI request failed."
+
+
+def evict_analysis_jobs(now: float) -> None:
+    for job_id, job in list(analysis_jobs.items()):
+        if now - job.started_at > JOB_TTL_SECONDS:
+            analysis_jobs.pop(job_id, None)
+    if len(analysis_jobs) <= JOB_STORE_LIMIT:
+        return
+    completed = sorted(
+        (
+            (job.started_at, job_id)
+            for job_id, job in analysis_jobs.items()
+            if job.status != "running"
+        ),
+    )
+    while len(analysis_jobs) > JOB_STORE_LIMIT and completed:
+        _, job_id = completed.pop(0)
+        analysis_jobs.pop(job_id, None)
+
+
+def set_job_stage(job: AnalysisJob | None, stage: str) -> None:
+    if job:
+        job.stage = stage
 
 
 def consensus_enabled() -> bool:
@@ -391,14 +436,14 @@ async def knowledge_search(payload: dict[str, Any]) -> Any:
         return error_response(error)
 
 
-@app.post("/api/annotate")
-async def annotate(payload: dict[str, Any]) -> Any:
+async def run_annotation(payload: dict[str, Any], job: AnalysisJob | None = None) -> dict[str, Any]:
     try:
         prompt = payload.get("prompt", "")
         lenses = payload.get("lenses", ["smc"])
         market_context = payload.get("marketContext", "")
         instrument = resolve_instrument(payload.get("instrument"), prompt)
         timeframe = normalize_timeframe(payload.get("timeframe"))
+        set_job_stage(job, "Fetching market data")
         market_data_result, ohlcv_result, research_result = await asyncio.gather(
             fetch_market_data(instrument),
             fetch_ohlcv_series(instrument, timeframe),
@@ -450,22 +495,41 @@ async def annotate(payload: dict[str, Any]) -> Any:
         else:
             attempt_specs = [(engine, None) for engine in engines]
         forecast_tasks = []
-        for engine, lens in attempt_specs:
+        async def run_analyst_attempt(
+            engine: str,
+            call_lenses: list[str],
+            instructions: str,
+            stage_index: int,
+        ) -> dict[str, Any]:
+            if per_lens:
+                set_job_stage(job, f"Analysing lens {stage_index}/{len(lenses)}")
+            operation = retry_with_backoff(
+                lambda: provider.annotate(
+                    payload.get("base64Image", ""),
+                    prompt,
+                    call_lenses,
+                    market_context,
+                    instructions,
+                    knowledge,
+                    engine=engine,
+                ),
+                engine,
+                "analyst annotate",
+            )
+            try:
+                return await asyncio.wait_for(operation, timeout=ANALYST_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError as error:
+                raise SafeMessageError("analysis timed out") from error
+
+        for index, (engine, lens) in enumerate(attempt_specs, start=1):
             call_lenses = [lens] if lens else lenses
             instructions = "\n".join(lens_instructions(call_lenses))
             forecast_tasks.append(
-                retry_with_backoff(
-                    lambda engine=engine, call_lenses=call_lenses, instructions=instructions: provider.annotate(
-                        payload.get("base64Image", ""),
-                        prompt,
-                        call_lenses,
-                        market_context,
-                        instructions,
-                        knowledge,
-                        engine=engine,
-                    ),
+                run_analyst_attempt(
                     engine,
-                    "analyst annotate",
+                    call_lenses,
+                    instructions,
+                    index,
                 )
             )
         scan_enabled = groq_scan_enabled() and provider.has_engine("groq")
@@ -575,6 +639,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
             synthesis_verified = False
             if len(synthesis_inputs) >= 2:
                 try:
+                    set_job_stage(job, "Synthesising lens convergence")
                     synthesis_result = await asyncio.wait_for(
                         run_synthesis(provider, synthesis_inputs),
                         timeout=25,
@@ -663,6 +728,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
         validation_engine: str | None = None
         validation_cross_provider = False
         if validator_enabled():
+            set_job_stage(job, "Validating")
             selected_engine = provider.name if per_lens else consensus.get("selectedEngine")
             successful_engines = [
                 model_result.get("engine")
@@ -760,6 +826,7 @@ async def annotate(payload: dict[str, Any]) -> Any:
             result["marketVerification"] = market_data.verification
         if market_research:
             result["marketResearch"] = market_research.metadata
+        set_job_stage(job, "Scoring risk")
         result["risk"] = calculate_risk(
             result.get("forecast", {}),
             market_data.verification if market_data else None,
@@ -827,9 +894,48 @@ async def annotate(payload: dict[str, Any]) -> Any:
         except Exception as error:
             logger.warning("Forecast logging failed: %s", error)
         return result
-    except Exception as error:
+    except Exception:
         logger.exception("Annotate error:")
-        return error_response(error)
+        raise
+
+
+async def run_analysis_job(job: AnalysisJob, payload: dict[str, Any]) -> None:
+    try:
+        job.result = await run_annotation(payload, job)
+        job.status = "done"
+        job.stage = ""
+    except Exception as error:
+        job.status = "error"
+        job.error = safe_error_message(error)
+        job.stage = ""
+    finally:
+        job.task = None
+
+
+@app.post("/api/annotate")
+async def annotate(payload: dict[str, Any]) -> JSONResponse:
+    evict_analysis_jobs(time.time())
+    job_id = uuid.uuid4().hex
+    job = AnalysisJob(started_at=time.time())
+    analysis_jobs[job_id] = job
+    job.task = asyncio.create_task(run_analysis_job(job, payload))
+    return JSONResponse({"jobId": job_id}, status_code=202)
+
+
+@app.get("/api/annotate/{job_id}")
+async def annotate_status(job_id: str) -> Any:
+    job = analysis_jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Analysis job not found."}, status_code=404)
+    if job.status == "running":
+        return {
+            "status": "running",
+            "stage": job.stage,
+            "startedAt": job.started_at,
+        }
+    if job.status == "done":
+        return {"status": "done", "result": job.result}
+    return {"status": "error", "error": job.error or "AI request failed."}
 
 
 @app.post("/api/chat")

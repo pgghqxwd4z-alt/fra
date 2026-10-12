@@ -529,6 +529,7 @@ const Visualizer: React.FC = () => {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>('15m');
   const [prompt, setPrompt] = useState('Identify institutional footprints and probabilistic entry zones.');
   const [processing, setProcessing] = useState(false);
+  const [analysisStage, setAnalysisStage] = useState<string | null>(null);
   const [isOver, setIsOver] = useState(false);
   const [coords, setCoords] = useState({ x: 0, y: 0 });
   
@@ -593,6 +594,7 @@ const Visualizer: React.FC = () => {
       setSynthesis(null);
       setSynthesisUnavailable(null);
       setScan(null);
+      setAnalysisStage(null);
       resetZoom();
     };
     reader.readAsDataURL(file);
@@ -664,9 +666,10 @@ const Visualizer: React.FC = () => {
   const handleProcess = async () => {
     if (!image || processing || selectedLenses.length === 0) return;
     setProcessing(true);
+    setAnalysisStage(null);
     try {
       const base64 = image.split(',')[1];
-      const result = await aiService.annotateChart(base64, prompt, selectedLenses, timeframe);
+      const result = await aiService.annotateChart(base64, prompt, selectedLenses, timeframe, setAnalysisStage);
       setResultImage(result.image);
       setAnalysis(result.analysis);
       setForecast(result.forecast ? { ...result.forecast, risk: result.risk } : null);
@@ -683,6 +686,7 @@ const Visualizer: React.FC = () => {
       setSynthesis(result.synthesis || null);
       setSynthesisUnavailable(result.synthesisUnavailable || null);
       setScan(result.scan || null);
+      setAnalysisStage(null);
       setShowOriginal(false);
     } catch (error) {
       console.error(error);
@@ -814,6 +818,7 @@ const Visualizer: React.FC = () => {
                       setSynthesis(null);
                       setSynthesisUnavailable(null);
                       setScan(null);
+                      setAnalysisStage(null);
                     }}
                     className="p-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-400 rounded-lg backdrop-blur-md border border-rose-500/30 transition-all pointer-events-auto"
                     title="Flush Image"
@@ -833,6 +838,7 @@ const Visualizer: React.FC = () => {
                     </div>
                     <div className="text-center space-y-1 px-4 relative z-10">
                       <p className="text-emerald-400 font-mono text-[10px] uppercase tracking-[0.4em] animate-pulse">Running Neural Overlay...</p>
+                      {analysisStage && <p className="text-emerald-300/70 font-mono text-[8px] uppercase tracking-[0.2em]">{analysisStage}</p>}
                       <p className="text-white/20 text-[8px] uppercase tracking-widest">Synthesizing Price Action & Intent</p>
                     </div>
                   </div>

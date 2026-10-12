@@ -97,7 +97,7 @@ async def run_synthesis(
     client = provider._require_claude()
     response = await client.messages.create(
         model=provider.claude_model,
-        max_tokens=2048,
+        max_tokens=8192,
         messages=[{"role": "user", "content": build_synthesis_prompt(lens_forecasts)}],
         output_config={"format": {"type": "json_schema", "schema": _to_claude_schema(SYNTHESIS_SCHEMA)}},
     )
